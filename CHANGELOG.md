@@ -3,11 +3,12 @@
 ## Unreleased
 
 - `Screen::pixel`, `disc`, `glow`, `finish_frame` and `PixelArt`: games draw objects as coloured regions (half-block pixels and soft glows) instead of text characters; `Particles` now draw as coloured pixels. `run` and `Headless` finish each frame for you.
-- `cargo run --example sail`: the flagship game: a boat on procedural waves under a day-night sky, dodging fireballs with particle trails.
+- `cargo run --example sail`: the flagship game: a sailboat that steers left and right, dodging fireballs that fall from the sky and fizzle out in steam when they reach the water. The sea grows rougher the farther you sail, and the sky runs from dawn to night.
 - `game::Waves` (one sea function for both the picture and the physics: `height`, `slope`, `surface_y`, `tilt` and `shade`, with `calm` and `stormy` presets) and `game::Particles` (pooled bursts, sparks and spray: `emit`, `burst`, `gravity`, `drag`, `palette`, `step` and `draw`, with no allocation after construction).
 - `Screen::backdrop` and `Screen::backdrop_in`: draw art formulas as the background of a game, or into a part of the screen.
 - `llms.txt`, README and CONTRIBUTING cover the games section; new example quickgame.
 - `cargo run --example glow`: a game of light and plasma (title, play, pause and game-over scenes; the sky ripples when you collect motes).
+- `glow` now draws its light, motes and trail as glowing coloured regions instead of text characters.
 - `game::Game`, `Next`, `Context`, `Headless` and `run`: the scene-based game loop (fixed 60 updates a second, scenes for menus and pause, a headless runner for tests, Ctrl+C always quits and q/Esc belong to the game).
 - `game::Rng` (deterministic random numbers, the same on every machine), `game::Timer` (cooldowns and spawn clocks in seconds of game time), `game::Pool` (fixed-capacity object lists that never reallocate) and `game::Hit` (rectangle and circle collision tests).
 - `game::Screen` (a drawing surface with text, fills, bars and sprites, all clipped to the screen so nothing panics off screen) and `game::Sprite` (pictures from string literals, with transparent spaces, two-colour `paint` and `flipped` mirroring).

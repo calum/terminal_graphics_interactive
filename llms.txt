@@ -128,7 +128,7 @@ A game keeps state, has several screens (title, play, pause, game over), reads h
 
 Use games when your program keeps state, has several screens, scores points or reads player input over time. Use art when it is a formula or a physics toy with no state to manage (`sketch`, `World`). Do not use games for a plain full-screen text UI or a widget toolkit; use `Terminal` directly or a TUI framework.
 
-Read `examples/sail.rs` (the flagship: art in games, with a sky and sea from one formula and pooled fireballs with particles) and `examples/glow.rs` (art in a game, in about 50 lines) to see the pieces used together.
+Read `examples/sail.rs` (the flagship: art in games, with a sky and a sea from formulas, pixel-art boat and island, and pooled fireballs with particles) and `examples/glow.rs` (art in a game, in about 50 lines) to see the pieces used together.
 
 The pieces, all in `game::*`:
 

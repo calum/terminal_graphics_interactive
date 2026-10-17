@@ -66,10 +66,10 @@ fn main() -> std::io::Result<()> {
 
 **Make games in your terminal.** A game is a set of screens (a title, a play screen, a pause, a game over). Each one is a `Game` that updates 60 times a second, reads held keys and the mouse, and draws on a `Screen`. The crate also brings random numbers, timers, object pools and collision shapes, and `Headless` runs a game with no terminal, so tests can play it.
 
-Play the examples. `sail` is the flagship: a boat sails on procedural waves under a sky that turns from dawn to night, dodging fireballs that leave trails of embers.
+Play the examples. `sail` is the flagship: a sailboat on the open sea, under a sky that turns from dawn to night. Steer left and right to dodge the fireballs that fall from the sky; the farther you sail, the rougher the sea and the more fireballs come.
 
 ```sh
-cargo run --example sail        # the flagship: a boat on procedural waves; dodge the fireballs
+cargo run --example sail        # the flagship: a sailboat on the sea; steer to dodge the fireballs
 cargo run --example glow        # a light drifts through a plasma sky; touch the motes
 cargo run --example quickgame   # steer a @ and collect the * stars for 20 seconds
 ```
