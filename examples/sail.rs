@@ -1552,7 +1552,7 @@ impl SailSim {
     }
 
     /// Runs one update: `inputs[i]` steers boat `i`, and a missing input holds.
-    fn step(&mut self, inputs: &[Steer], rng: &mut Rng) {
+    fn advance(&mut self, inputs: &[Steer], rng: &mut Rng) {
         self.fx.clear();
         let dt = STEP;
         let (width, rows) = (self.env.width, self.env.rows);
@@ -1707,6 +1707,65 @@ impl SailSim {
             }
         }
         self.fireballs.retain(|f| f.stage != Stage::Spent);
+    }
+}
+
+impl Encode for Steer {
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.push(self.0 as u8);
+    }
+}
+
+impl Decode for Steer {
+    fn decode(r: &mut Reader<'_>) -> Result<Steer, DecodeError> {
+        Ok(Steer(r.u8()? as i8))
+    }
+}
+
+impl Sim for SailSim {
+    type Input = Steer;
+
+    fn step(&mut self, inputs: &[Steer], rng: &mut Rng) {
+        self.advance(inputs, rng);
+    }
+
+    /// Everything the rules read or write. The events in `fx` are left out:
+    /// they are for the picture.
+    fn hash(&self, h: &mut Hasher) {
+        let env = &self.env;
+        h.f32(env.width)
+            .f32(env.rows)
+            .f32(env.wave_scale)
+            .f32(env.boat_speed)
+            .f32(env.fireball_rate);
+        h.f32(self.elapsed)
+            .f32(self.distance)
+            .u32(self.bonus)
+            .f32(self.phase)
+            .bool(self.launching)
+            .f32(self.spawn.remaining());
+        for s in &self.sailors {
+            h.f32(s.boat.x)
+                .f32(s.boat.vx)
+                .f32(s.boat.keel)
+                .f32(s.boat.keel_v)
+                .u32(s.lives)
+                .f32(s.invulnerable_until);
+        }
+        h.u32(self.fireballs.len() as u32);
+        for f in self.fireballs.iter() {
+            h.f32(f.x)
+                .f32(f.y)
+                .f32(f.vx)
+                .f32(f.vy)
+                .f32(f.gravity)
+                .u8(f.passed);
+            match f.stage {
+                Stage::Flying => h.u8(0),
+                Stage::Sinking(age) => h.u8(1).f32(age),
+                Stage::Spent => h.u8(2),
+            };
+        }
     }
 }
 
@@ -3404,6 +3463,82 @@ mod tests {
         );
     }
 
+    fn hash_of(sim: &SailSim) -> u64 {
+        let mut h = Hasher::new();
+        sim.hash(&mut h);
+        h.finish()
+    }
+
+    /// Two boats on scripted steering for `steps` updates.
+    fn two_boats(steps: u32) -> (SailSim, Rng) {
+        let mut rng = Rng::new(11);
+        let mut sim = SailSim::new(2, Env::new((80, 24)), &mut rng);
+        for tick in 0..steps {
+            let a = Steer(match (tick / 70) % 3 {
+                0 => 1,
+                1 => 0,
+                _ => -1,
+            });
+            let b = Steer(match (tick / 50) % 3 {
+                0 => -1,
+                1 => 1,
+                _ => 0,
+            });
+            sim.step(&[a, b], &mut rng);
+        }
+        (sim, rng)
+    }
+
+    #[test]
+    fn two_boats_over_3000_steps_reach_the_recorded_state_on_every_machine() {
+        // CI runs this on Linux, macOS (arm64) and Windows: the same number
+        // there is evidence that the rules agree across machines
+        let (sim, rng) = two_boats(3000);
+        assert!(
+            sim.sailors.iter().any(|s| s.lives < LIVES) || sim.bonus > 0,
+            "the run should see some action"
+        );
+        assert_eq!(
+            (hash_of(&sim), rng.state()),
+            (17047842182560643922, 12371428055675856712)
+        );
+    }
+
+    #[test]
+    fn the_hash_follows_the_rules_state_and_ignores_the_picture_events() {
+        let (mut sim, _) = two_boats(500);
+        let before = hash_of(&sim);
+        sim.fx.push(Fx::Near { x: 1.0, y: 2.0 });
+        assert_eq!(hash_of(&sim), before, "events are for the picture only");
+        sim.sailors[1].boat.x += 0.001;
+        assert_ne!(hash_of(&sim), before, "a boat moved");
+        let (other, _) = two_boats(501);
+        assert_ne!(hash_of(&other), before, "one step later");
+    }
+
+    #[test]
+    fn the_same_inputs_and_seed_give_the_same_state_and_another_seed_does_not() {
+        let (a, _) = two_boats(800);
+        let (b, _) = two_boats(800);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        let mut rng = Rng::new(12);
+        let mut c = SailSim::new(2, Env::new((80, 24)), &mut rng);
+        for _ in 0..800 {
+            c.step(&[Steer(1), Steer(0)], &mut rng);
+        }
+        assert_ne!(hash_of(&c), hash_of(&a));
+    }
+
+    #[test]
+    fn a_steering_input_round_trips_through_its_bytes() {
+        for value in [-1, 0, 1] {
+            assert_eq!(
+                Steer::from_bytes(&Steer(value).to_bytes()),
+                Ok(Steer(value))
+            );
+        }
+        assert_eq!(Steer(-1).to_bytes().len(), 1);
+    }
     #[test]
     fn the_tuning_has_the_three_knobs_at_their_defaults() {
         let knobs = tuning().knobs();
