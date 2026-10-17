@@ -98,3 +98,5 @@ in a PR. Publishing cannot be undone, so:
 - `llms.txt` - the page for AI agents; `tests/llms.rs` keeps it, the README and the examples in step
 - `CONTRIBUTING.md` - how to add a palette, a `World` setting or an example; `tests/contributing.rs` keeps it honest
 - `docs/superpowers/specs/` - design notes
+- `examples/make_gifs.rs` and `examples/site/` - the README GIFs: a pure Rust GIF encoder (`gif.rs`), a rasteriser with the mouse arrow (`raster.rs`), and a strict mini Rust interpreter (`script/`) that runs the real example sources, shared with the website editor. Regenerate with `cargo run --release --example make_gifs` after changing `plasma.rs` or `balls.rs`
+- `assets/` - the generated GIFs (not published to crates.io; the README points at their raw GitHub URLs)

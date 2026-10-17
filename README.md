@@ -1,20 +1,28 @@
 # terminal_graphics_interactive
 
-Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
+[![CI](https://github.com/calum/terminal_graphics_interactive/actions/workflows/ci.yml/badge.svg)](https://github.com/calum/terminal_graphics_interactive/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/terminal_graphics_interactive.svg)](https://crates.io/crates/terminal_graphics_interactive)
+[![docs.rs](https://docs.rs/terminal_graphics_interactive/badge.svg)](https://docs.rs/terminal_graphics_interactive)
+[![licence](https://img.shields.io/crates/l/terminal_graphics_interactive.svg)](#licence)
 
-**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, an easy [art API](#make-art-in-a-few-lines) (formula animations and a physics world), and [`llms.txt`](llms.txt) for AI coding agents. Next: a game example and terminal resize events. Want to add a palette, an effect or an example? See [CONTRIBUTING.md](CONTRIBUTING.md).
+**Make art, animations, games and drawing tools in your terminal, with the mouse and keyboard, in a few lines of Rust.** It works in Windows PowerShell, Linux, macOS and over SSH. Its only dependency is [`terminal_graphics`](https://github.com/calum/terminal_graphics_api) (re-exported), and almost nothing in it is `unsafe`.
 
-## Try it
+| A formula becomes an animation | A physics world in five lines |
+|:---:|:---:|
+| ![An animated plasma. A mouse arrow glides across it and ripples follow](https://raw.githubusercontent.com/calum/terminal_graphics_interactive/master/assets/plasma.gif) | ![Five bouncing balls. A mouse arrow pulls them, a click adds one, and the right button pushes them away](https://raw.githubusercontent.com/calum/terminal_graphics_interactive/master/assets/balls.gif) |
+| move the mouse to make ripples | the mouse pulls the balls, the right button pushes them, a click adds one |
+
+*These are recordings of the real examples below, run against the real library, with a scripted mouse arrow drawn on top (`cargo run --release --example make_gifs` rebuilds them).*
+
+### [Try it in your browser](https://calum.github.io/terminal_graphics_interactive/)
+
+Write some Rust in the page, press run, and watch it in a terminal. Nothing to install.
+
+## Install
 
 ```sh
-cargo run --example plasma        # an animated plasma in one formula; move the mouse to make ripples
-cargo run --example balls         # five big bouncing balls; the mouse pulls them, right button pushes, click adds one
-cargo run --example paint         # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
-cargo run --example screensaver   # bouncing dots with fading trails; click to add one, any key quits
-cargo run --example events        # prints every key and mouse event
+cargo add terminal_graphics_interactive
 ```
-
-It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`). Press `q` to quit.
 
 ## Make art in a few lines
 
@@ -54,50 +62,81 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-To test or measure art without a terminal, `sketch_frame(&mut display, &palette, t, &pointer, formula)` draws one frame into a `Display`, and `world.simulation(seed)` gives a `Simulation` you advance yourself.
+## Add the mouse and keyboard to anything
 
-## How it works
+Under the art API is `Terminal`: a full-screen session that gives you key presses, mouse clicks, drags, scrolling and pastes as events, and a window to draw a `Display` in. `poll` doubles as the frame timer, and `mouse.cell_in(&display)` turns a mouse position into a cell:
 
-1. `Terminal::start()` switches to the alternate screen (your scrollback comes back on exit), puts the terminal in raw mode, turns on mouse reporting, hides the cursor and finds the window size. Dropping it undoes all of that, even on panic. `terminal.poll(timeout)` returns the next event, or `None` when the time runs out (your cue to draw the next frame); `terminal.wait()` blocks. (`RawMode`, `Parser`, `MOUSE_ON` and `MOUSE_OFF` are public too if you want the pieces.)
-2. Events are `Event::Key` and `Event::Mouse`. A lone Escape byte becomes the Escape key after 25 ms, so arrow keys over a slow SSH link are not mistaken for it.
-3. `terminal.draw(&display)` shows a `Display` at the top left of the window, so mouse coordinates (0-based cells, `(0, 0)` at the top left) line up with display cells: `mouse.cell_in(&display)` gives the cell under the pointer. Make the display at most `terminal.size()` wide and one row shorter than it is high.
+```rust,no_run
+use std::time::Duration;
+use terminal_graphics_interactive::{Colour, Display, Event, MouseKind, Terminal};
 
-## `unsafe`
+fn main() -> std::io::Result<()> {
+    let mut terminal = Terminal::start()?;
 
-Raw mode cannot be done in safe Rust, so it is the only place `unsafe` appears: three libc calls on Unix (`src/raw_mode/unix.rs`) and three `kernel32` calls on Windows (`src/raw_mode/windows.rs`), each with a `// SAFETY:` comment. Everything else is safe Rust, and `tests/unsafe_audit.rs` fails the build if `unsafe` appears anywhere else.
+    // `draw` needs a display at most one row shorter than the window
+    let (width, height) = terminal.size();
+    let mut display = Display::new(width, height.saturating_sub(1));
 
-## Performance
+    loop {
+        terminal.draw(&display)?;
 
-`cargo bench` runs `benches/parser.rs`, which uses only `std`. Median of 15 samples on one machine (Windows 11, release build), parsing 10,000 events fed in chunks:
+        // wait up to 50 ms for input; `None` means a frame passed with no input
+        match terminal.poll(Duration::from_millis(50))? {
+            Some(Event::Key(key)) if key.is_char('q') || key.is_ctrl('c') => return Ok(()),
+            Some(Event::Mouse(mouse)) if matches!(mouse.kind, MouseKind::Down(_)) => {
+                if let Some((x, y)) = mouse.cell_in(&display) {
+                    display.set_pixel(x, y, 'X', Colour::BrightYellow, Colour::Blue);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+```
 
-| Stream | Chunk | Before | Now |
-|---|---|---:|---:|
-| mouse drag (SGR) | 64 B | 44 ns/event | 41 ns/event |
-| mouse drag (SGR) | 4 KB | 134 ns/event | 37 ns/event |
-| mouse drag (SGR) | 1 MB paste | 1630 ns/event | 85 ns/event |
-| keyboard | 64 B | 102 ns/event | 28 ns/event |
-| keyboard | 1 MB paste | 415 ns/event | 27 ns/event |
+Ctrl+C arrives as a key (`key.is_ctrl('c')`) while a `Terminal` exists, so check for it and leave your loop. Pasted text arrives as one `Event::Paste`, so pasting a command can never trigger your key bindings.
 
-"Before" had two problems that the benchmark exposed: parsed bytes were removed from the front of the buffer after every event (quadratic on large pastes), and key sequences allocated a `Vec`. A terminal produces nowhere near 10 million events a second, so parsing is far from being a bottleneck.
+## More examples
 
-`cargo bench --bench art` measures the art maths (the frame budget at 30 frames a second is 33,000 µs; the cost of printing the frame is in `terminal_graphics`' own benchmarks). Same machine, release build:
+```sh
+cargo run --example plasma        # the formula above
+cargo run --example balls         # the physics world above
+cargo run --example paint         # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears
+cargo run --example screensaver   # bouncing dots with fading trails; click to add one, any key quits
+cargo run --example events        # prints every key and mouse event
+```
 
-| Per frame | 80x24 | 200x60 |
-|---|---:|---:|
-| plasma (3 sines and a distance per cell) | 93 µs | 786 µs |
-| one sine per cell | 80 µs | 523 µs |
-| 5 big balls with trails | 15 µs | 71 µs |
-| 64 small balls with trails | 30 µs | 83 µs |
+## For AI coding agents
 
-Even a 200 by 60 window with three sines per cell uses about 2% of a frame, so there is plenty of room for a heavier formula.
+[`llms.txt`](llms.txt) is a short page written for you: what this crate is, when to use it and when not to, the whole API, the mistakes that are easy to make (Ctrl+C is an event, the display must be one row shorter than the window, use `\r\n` in raw mode) and complete examples that are checked against the code.
 
-## Platform checks so far
+## Platforms
 
-| Platform | Built and unit tested | Run against a real terminal |
-|---|---|---|
-| Windows | yes | yes: 16 end-to-end tests in a ConPTY pseudo console (`tests/e2e_windows.rs`), run in CI and locally. Not yet tried by a person in a real PowerShell or Windows Terminal window |
-| Linux, macOS | yes | yes: the same 16 end-to-end tests in a pty (`tests/e2e_unix.rs`), run in CI on Ubuntu and macOS |
+| | Built and tested | Run in a real terminal by the tests |
+|---|:---:|:---:|
+| Windows (PowerShell, Windows Terminal) | yes | yes, in a ConPTY pseudo console |
+| Linux | yes | yes, in a pty |
+| macOS | yes | yes, in a pty |
 
-## License
+Over SSH it works when a terminal is allocated (`ssh -t host ...`). The tests prove that raw mode, key and mouse sequences, pastes and quitting work on each system. They cannot prove that a physical mouse click becomes an escape sequence: that is your terminal emulator's job.
+
+## Under the hood
+
+- **Almost no `unsafe`.** Raw mode cannot be done in safe Rust, so the only `unsafe` is a few libc calls on Unix and a few `kernel32` calls on Windows (`src/raw_mode/`), each with a `// SAFETY:` comment. `tests/unsafe_audit.rs` fails the build if `unsafe` appears anywhere else.
+- **Fast.** `cargo bench` runs benchmarks that use only `std`. A 200 by 60 plasma costs about 0.8 ms of a 33 ms frame, and parsing input takes tens of nanoseconds per event.
+- **Tested.** Unit tests for the parser, the palette and the simulation, and end-to-end tests that run every example in a real pseudo terminal on all three systems.
+
+## Contributing
+
+Small, friendly pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has short recipes for adding a palette, a `World` setting or an example, and [CLAUDE.md](CLAUDE.md) explains the principles and process.
+
+## Links
+
+- Website with a live editor: https://calum.github.io/terminal_graphics_interactive/
+- crates.io: https://crates.io/crates/terminal_graphics_interactive
+- API documentation: https://docs.rs/terminal_graphics_interactive
+- The graphics crate it builds on: https://github.com/calum/terminal_graphics_api
+
+## Licence
 
 Licensed under either of MIT or Apache-2.0 at your option.

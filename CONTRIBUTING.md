@@ -67,6 +67,22 @@ can copy and change.
    scenario can fail by breaking the code on purpose, then undo that.
 3. List it in the README.
 
+## Update the GIFs
+
+The animations in the README are made by a Rust program, so anyone can rebuild
+them. They run the real source of `examples/plasma.rs` and `examples/balls.rs`
+against the real library with a scripted mouse, and draw the arrow and click
+rings on top. If you change one of those examples, or the art API's look,
+regenerate them and commit the result:
+
+```sh
+cargo run --release --example make_gifs
+```
+
+The program is [examples/make_gifs.rs](examples/make_gifs.rs). To add a GIF,
+add a `Take` there (the example to run and where the mouse goes) and show it in
+the README.
+
 ## Formula art
 
 For a new look, you usually do not need to change the library at all: write a

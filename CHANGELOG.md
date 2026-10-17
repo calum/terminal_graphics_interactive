@@ -29,3 +29,5 @@
 - New examples `plasma` and `balls`, benchmarks (`cargo bench --bench art`), `CONTRIBUTING.md` (how to add a palette, a setting or an example), and end-to-end scenarios for both examples on Windows, Linux and macOS.
 - `llms.txt` has a section on making art, whose examples are the real `examples/plasma.rs` and `examples/balls.rs`.
 - The design note is `docs/superpowers/specs/2026-10-17-art-api-design.md`.
+- README rewritten: a short pitch with GIFs of the plasma and the physics world (a scripted mouse arrow and click rings drawn over the real examples), install, the examples, and how to add mouse and keyboard to anything. `tests/readme.rs` checks the GIFs exist and are real GIFs of a sensible size, every GIF is shown, and the README shows the real example files.
+- `cargo run --release --example make_gifs` rebuilds `assets/*.gif`. It uses a pure Rust GIF encoder, a rasteriser, and a strict mini Rust interpreter (`examples/site/script`) that runs the real example sources and refuses what rustc would refuse (for example `cell.x * 2`). None of it is published to crates.io.

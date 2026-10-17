@@ -20,6 +20,7 @@ fn every_file_it_names_exists() {
         "src/art/world.rs",
         "src/art/sketch.rs",
         "tests/support/mod.rs",
+        "examples/make_gifs.rs",
         "llms.txt",
         "CHANGELOG.md",
         "CLAUDE.md",
@@ -28,9 +29,9 @@ fn every_file_it_names_exists() {
             text.contains(path),
             "CONTRIBUTING.md does not mention {path}"
         );
-        // CLAUDE.md is left out of the published crate, so only the mention is
+        // these are left out of the published crate, so only the mention is
         // required there
-        if path != "CLAUDE.md" {
+        if path != "CLAUDE.md" && path != "examples/make_gifs.rs" {
             assert!(
                 root().join(path).exists(),
                 "{path} is named but does not exist"
