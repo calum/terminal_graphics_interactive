@@ -27,7 +27,7 @@ Status: early (0.1) and not yet published to crates.io. Use it from git:
 - `terminal.poll(timeout) -> io::Result<Option<Event>>`: waits up to `timeout`. `None` means the time ran out, which is the cue to advance an animation frame. `Duration::ZERO` checks without waiting. `terminal.wait() -> io::Result<Event>` blocks until something happens.
 - `terminal.size() -> (u32, u32)`: window size in cells as `(width, height)`; `(80, 24)` if the terminal did not answer.
 - `terminal.draw(&display) -> io::Result<()>`: shows a `Display` at the top left of the window. Call it once per frame.
-- `Event` is `Event::Key(Key)` or `Event::Mouse(Mouse)`.
+- `Event` is `Event::Key(Key)`, `Event::Mouse(Mouse)` or `Event::Paste(String)`. Pasted text arrives as a single `Event::Paste`, not as key presses, so pasting `cargo run q` cannot trigger your key bindings or quit your program. `Event` can grow, so always end a `match` on it with a `_ => {}` arm.
 - `Key` has `code: KeyCode` and `modifiers: Modifiers`; `key.is_char('q')` and `key.is_ctrl('c')` cover the common checks. `KeyCode` is `Char(char)`, `Enter`, `Tab`, `Backspace`, `Esc`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete` or `F(1..=12)`.
 - `Mouse` has `kind: MouseKind`, `x`, `y` and `modifiers`. `MouseKind` is `Down(MouseButton)`, `Up(MouseButton)`, `Drag(MouseButton)`, `Moved`, `ScrollUp` or `ScrollDown`; `MouseButton` is `Left`, `Middle` or `Right`. `mouse.cell_in(&display) -> Option<(isize, isize)>` gives the display cell under the pointer, or `None` if it is outside.
 - Lower level pieces are public too: `Parser` (`feed`, `next_event`, `flush`) turns input bytes into events, and `RawMode::enable()` is the raw-mode guard.
@@ -39,6 +39,7 @@ Status: early (0.1) and not yet published to crates.io. Use it from git:
 - Mouse coordinates are 0-based cells with `(0, 0)` at the top left, the same as `Display`. Do not subtract 1.
 - Raw mode turns off the terminal's own newline handling. If you print lines yourself, use `\r\n`, not `\n`. Drawing with `draw` is unaffected.
 - Run in a terminal. Over SSH use `ssh -t host command`, or `Terminal::start()` returns an error. Under tmux or screen, turn their `mouse` option on to receive mouse events.
+- A terminal that does not support bracketed paste (possibly the classic Windows console window) may send pasted text as ordinary key presses. Windows Terminal, iTerm2 and most Linux terminals are expected to send `Event::Paste`.
 - Not every terminal sends every event: `MouseKind::Moved` (movement with no button held) is not reported, only presses, releases, drags and scrolling.
 
 ## Example: click to mark cells, q to quit

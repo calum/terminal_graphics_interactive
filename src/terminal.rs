@@ -14,6 +14,11 @@ const SHOW_CURSOR: &str = "\x1b[?25h";
 const ENTER_ALT_SCREEN: &str = "\x1b[?1049h";
 const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
 
+/// Ask the terminal to wrap pasted text in markers, so it arrives as one
+/// `Event::Paste` and not as key presses.
+const PASTE_ON: &str = "\x1b[?2004h";
+const PASTE_OFF: &str = "\x1b[?2004l";
+
 /// Used when the terminal does not answer the size query.
 const DEFAULT_SIZE: (u32, u32) = (80, 24);
 
@@ -22,12 +27,12 @@ const SIZE_REPLY_WAIT: Duration = Duration::from_millis(300);
 
 /// What is printed when a session starts: mouse reporting on, cursor hidden.
 fn start_sequence() -> String {
-    format!("{ENTER_ALT_SCREEN}{MOUSE_ON}{HIDE_CURSOR}")
+    format!("{ENTER_ALT_SCREEN}{MOUSE_ON}{PASTE_ON}{HIDE_CURSOR}")
 }
 
 /// What is printed when a session ends: undo everything `start_sequence` did.
 fn stop_sequence() -> String {
-    format!("{MOUSE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
+    format!("{MOUSE_OFF}{PASTE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
 }
 
 /// Moves the cursor to the far bottom right corner (terminals stop at the
@@ -217,6 +222,20 @@ mod tests {
         assert!(start_sequence().contains(ENTER_ALT_SCREEN));
         let stop = stop_sequence();
         assert!(stop.ends_with(LEAVE_ALT_SCREEN), "{stop:?}");
+    }
+
+    #[test]
+    fn start_asks_for_bracketed_paste_and_stop_turns_it_off_before_leaving() {
+        assert!(start_sequence().contains("\x1b[?2004h"));
+        let stop = stop_sequence();
+        let off = stop.find("\x1b[?2004l").expect("turns bracketed paste off");
+        let leave = stop
+            .find(LEAVE_ALT_SCREEN)
+            .expect("leaves the alternate screen");
+        assert!(
+            off < leave,
+            "paste mode is reset while still on the alternate screen"
+        );
     }
 
     #[test]

@@ -4,6 +4,14 @@ use crate::event::{Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind
 
 const ESC: u8 = 0x1b;
 
+/// Sent by a terminal around pasted text once bracketed paste is turned on.
+const PASTE_START: &[u8] = b"[200~";
+const PASTE_END: &[u8] = b"[201~";
+
+/// The most pasted text kept. Anything beyond is dropped, so pasting a huge
+/// file cannot use unlimited memory.
+const MAX_PASTE: usize = 1 << 20;
+
 /// Longest CSI sequence we wait for before giving up on it as garbage.
 const MAX_CSI_LEN: usize = 64;
 
@@ -34,6 +42,8 @@ pub struct Parser {
     expect_report: bool,
     /// The last report received, until it is taken.
     report: Option<(u32, u32)>,
+    /// The text of a paste whose end has not arrived yet.
+    paste: Option<Vec<u8>>,
 }
 
 impl Parser {
@@ -56,6 +66,32 @@ impl Parser {
     pub fn next_event(&mut self) -> Option<Event> {
         loop {
             let front = &self.buffer[self.start..];
+
+            if let Some(collected) = &mut self.paste {
+                match find(front, PASTE_END) {
+                    Some(at) => {
+                        keep(collected, &front[..at]);
+                        self.start += at + PASTE_END.len();
+                        let text = String::from_utf8_lossy(collected).into_owned();
+                        self.paste = None;
+                        return Some(Event::Paste(text));
+                    }
+                    None => {
+                        // the end marker may be split across reads, so hold
+                        // back as many bytes as it could have started in
+                        let take = front.len().saturating_sub(PASTE_END.len() - 1);
+                        keep(collected, &front[..take]);
+                        self.start += take;
+                        return None;
+                    }
+                }
+            }
+            if front.starts_with(PASTE_START) {
+                self.start += PASTE_START.len();
+                self.paste = Some(Vec::new());
+                continue;
+            }
+
             if self.expect_report {
                 if let Some((used, row, column)) = parse_cursor_report(front) {
                     self.report = Some((row, column));
@@ -99,7 +135,7 @@ impl Parser {
     /// still complete an event, so the caller should wait a moment and then
     /// call [`Parser::flush`].
     pub fn has_pending(&self) -> bool {
-        self.start < self.buffer.len()
+        self.start < self.buffer.len() || self.paste.is_some()
     }
 
     /// Call when no more bytes are coming for a moment (for example after a
@@ -112,6 +148,19 @@ impl Parser {
         }
         None
     }
+}
+
+/// Where `needle` first occurs in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Adds `bytes` to the pasted text, up to the limit.
+fn keep(collected: &mut Vec<u8>, bytes: &[u8]) {
+    let room = MAX_PASTE.saturating_sub(collected.len());
+    collected.extend_from_slice(&bytes[..bytes.len().min(room)]);
 }
 
 /// `ESC [ row ; column R` at the front of `buf`: the bytes used, the row and the column.
@@ -585,6 +634,118 @@ mod tests {
     fn unknown_sequences_are_skipped_without_blocking_later_input() {
         assert_eq!(parse(b"\x1b[999zq"), vec![key(KeyCode::Char('q'))]);
         assert_eq!(parse(b"\x1b[<9;9;9yq"), vec![key(KeyCode::Char('q'))]);
+    }
+
+    fn paste(text: &str) -> Event {
+        Event::Paste(text.to_string())
+    }
+
+    #[test]
+    fn bracketed_paste_is_one_paste_event_not_key_presses() {
+        assert_eq!(
+            parse(b"\x1b[200~cargo run\x1b[201~"),
+            vec![paste("cargo run")]
+        );
+    }
+
+    #[test]
+    fn a_paste_keeps_newlines_escapes_and_unicode_exactly() {
+        let text = "a\x1b[Ab\r\nc€\t\x1b";
+        let mut input = b"\x1b[200~".to_vec();
+        input.extend_from_slice(text.as_bytes());
+        input.extend_from_slice(b"\x1b[201~");
+        assert_eq!(parse(&input), vec![paste(text)]);
+    }
+
+    #[test]
+    fn an_empty_paste_is_an_empty_paste_event() {
+        assert_eq!(parse(b"\x1b[200~\x1b[201~"), vec![paste("")]);
+    }
+
+    #[test]
+    fn keys_around_a_paste_are_still_keys_and_stay_in_order() {
+        assert_eq!(
+            parse(b"a\x1b[200~xyz\x1b[201~b"),
+            vec![
+                key(KeyCode::Char('a')),
+                paste("xyz"),
+                key(KeyCode::Char('b'))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_paste_split_across_feeds_waits_for_its_end() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[20");
+        assert_eq!(p.next_event(), None);
+        p.feed(b"0~hel");
+        assert_eq!(p.next_event(), None);
+        assert!(p.has_pending(), "inside a paste");
+        p.feed(b"lo\x1b[2");
+        assert_eq!(p.next_event(), None);
+        p.feed(b"01~!");
+        assert_eq!(p.next_event(), Some(paste("hello")));
+        assert_eq!(p.next_event(), Some(key(KeyCode::Char('!'))));
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn the_end_marker_split_at_every_possible_point_still_ends_the_paste() {
+        let end = b"\x1b[201~";
+        for split in 1..end.len() {
+            let mut p = Parser::new();
+            p.feed(b"\x1b[200~ab");
+            p.feed(&end[..split]);
+            assert_eq!(p.next_event(), None, "split at {split}");
+            p.feed(&end[split..]);
+            assert_eq!(p.next_event(), Some(paste("ab")), "split at {split}");
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_in_a_paste_is_replaced_not_fatal() {
+        assert_eq!(
+            parse(b"\x1b[200~a\xffb\x1b[201~"),
+            vec![paste("a\u{fffd}b")]
+        );
+    }
+
+    #[test]
+    fn a_huge_paste_is_cut_to_a_limit_instead_of_eating_memory() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[200~");
+        let chunk = vec![b'x'; 64 * 1024];
+        for _ in 0..64 {
+            p.feed(&chunk); // 4 MiB in all
+            assert_eq!(p.next_event(), None);
+        }
+        p.feed(b"\x1b[201~z");
+        match p.next_event() {
+            Some(Event::Paste(text)) => {
+                assert!(text.len() <= 1 << 20, "kept {} bytes", text.len());
+                assert!(text.len() >= 1 << 19, "kept far too little");
+            }
+            other => panic!("expected a paste, got {other:?}"),
+        }
+        assert_eq!(p.next_event(), Some(key(KeyCode::Char('z'))));
+    }
+
+    #[test]
+    fn a_stray_paste_end_marker_is_ignored() {
+        assert_eq!(parse(b"\x1b[201~a"), vec![key(KeyCode::Char('a'))]);
+    }
+
+    #[test]
+    fn garbage_inside_a_paste_never_panics() {
+        for a in 0..=255u8 {
+            let mut p = Parser::new();
+            p.feed(b"\x1b[200~");
+            p.feed(&[a, 0x1b, a, b'[', a]);
+            p.feed(b"\x1b[201~");
+            while p.next_event().is_some() {}
+            p.flush();
+        }
     }
 
     #[test]

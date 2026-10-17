@@ -174,6 +174,11 @@ impl Pty {
         );
     }
 
+    /// Whether the program has already exited.
+    fn has_exited(&self) -> bool {
+        self.child.lock().unwrap().try_wait().unwrap().is_some()
+    }
+
     /// Waits for the program to exit and returns its exit code.
     fn exit_code(&self) -> u32 {
         let deadline = Instant::now() + Duration::from_secs(10);

@@ -175,6 +175,9 @@ impl Paint {
                 }
                 _ => {}
             },
+            // Pasted text is not typing: ignore it, so pasting `cargo run q` can
+            // neither clear the canvas nor quit. More kinds of event may come.
+            _ => {}
         }
         true
     }
@@ -371,6 +374,21 @@ mod tests {
         let mut paint = Paint::new(20, 6);
         paint.handle(&down(2, 2));
         paint.handle(&drag(500, -500));
+    }
+
+    #[test]
+    fn pasted_text_is_ignored_so_it_cannot_trigger_commands() {
+        // a right click often pastes the clipboard, and `cargo run ...` contains
+        // a `c`, which would otherwise clear the canvas, and a `q`, which quits
+        let mut paint = Paint::new(20, 6);
+        paint.handle(&key('3'));
+        paint.handle(&down(3, 3));
+        let before = paint.display.clone();
+
+        assert!(paint.handle(&Event::Paste("cargo run --example paint q 7 c".into())));
+
+        assert_eq!(paint.display, before);
+        assert_eq!(paint.brush, 2);
     }
 
     #[test]

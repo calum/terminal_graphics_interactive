@@ -135,6 +135,8 @@ impl Screensaver {
                 Action::Continue
             }
             Event::Mouse(_) => Action::Continue,
+            // pasted text is not a key press, and more kinds of event may come
+            _ => Action::Continue,
         }
     }
 
@@ -372,6 +374,16 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         assert_eq!(saver.handle(&scroll), Action::Continue);
+    }
+
+    #[test]
+    fn pasted_text_neither_quits_nor_adds_dots() {
+        let mut saver = empty(10, 6);
+        assert_eq!(
+            saver.handle(&Event::Paste("anything".into())),
+            Action::Continue
+        );
+        assert!(saver.dots.is_empty());
     }
 
     #[test]
