@@ -6,8 +6,10 @@ mod event;
 mod input;
 mod parser;
 mod raw_mode;
+mod terminal;
 
 pub use event::{Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind};
 pub use parser::Parser;
 pub use raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
+pub use terminal::Terminal;
 pub use terminal_graphics::*;

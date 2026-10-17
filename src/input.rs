@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 /// only has to cover a slow SSH link.
 pub(crate) const ESCAPE_WAIT: Duration = Duration::from_millis(25);
 
+/// The longest a single poll waits (a day). Longer timeouts are shortened to it.
+pub(crate) const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
 pub(crate) struct Input {
     chunks: Receiver<Vec<u8>>,
     parser: Parser,
@@ -34,7 +37,8 @@ impl Input {
     /// Waits up to `timeout` for the next event. `Ok(None)` means the time ran
     /// out; an error means the input has ended (stdin was closed).
     pub(crate) fn poll(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
-        let deadline = Instant::now() + timeout;
+        // Instant arithmetic panics on overflow, so cap absurd timeouts
+        let deadline = Instant::now() + timeout.min(MAX_TIMEOUT);
         loop {
             // take everything that has already arrived before deciding anything
             let mut closed = false;
@@ -191,6 +195,16 @@ mod tests {
         assert_eq!(input.poll(Duration::ZERO).unwrap(), None);
         sleep(ESCAPE_WAIT * 3);
         assert_eq!(input.poll(Duration::ZERO).unwrap(), Some(key(KeyCode::Esc)));
+    }
+
+    #[test]
+    fn an_enormous_timeout_does_not_overflow_or_panic() {
+        let (tx, mut input) = input();
+        tx.send(b"a".to_vec()).unwrap();
+        assert_eq!(
+            input.poll(Duration::MAX).unwrap(),
+            Some(key(KeyCode::Char('a')))
+        );
     }
 
     #[test]

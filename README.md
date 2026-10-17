@@ -2,7 +2,7 @@
 
 Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
 
-**Status: early (0.1).** Done: the input parser and raw terminal mode. Next: an event loop (`poll` with a timeout), mapping mouse positions to `Display` cells, and a first paint-program example.
+**Status: early (0.1).** Done: the input parser, raw terminal mode, and `Terminal`, an interactive session with `poll(timeout)`. Next: mapping mouse positions to `Display` cells (alternate screen, terminal size without extra unsafe), a paint-program example, and `llms.txt`.
 
 ## Try it
 
@@ -14,9 +14,9 @@ Click, drag, scroll and type in the window; each event is printed. `q` or Ctrl+C
 
 ## How it works
 
-1. `RawMode::enable()` puts the terminal in raw mode until the guard is dropped.
-2. Print `MOUSE_ON` to ask the terminal to report the mouse; print `MOUSE_OFF` when done.
-3. Read bytes from stdin and give them to a `Parser`; it yields `Event::Key` and `Event::Mouse` values. Mouse coordinates are 0-based cells with `(0, 0)` at the top left, the same orientation as `Display`.
+1. `Terminal::start()` puts the terminal in raw mode, turns on mouse reporting and hides the cursor. Dropping it undoes all of that, even on panic. `terminal.poll(timeout)` returns the next event, or `None` when the time runs out (your cue to draw the next frame); `terminal.wait()` blocks. (`RawMode`, `Parser`, `MOUSE_ON` and `MOUSE_OFF` are public too if you want the pieces.)
+2. Events are `Event::Key` and `Event::Mouse`. A lone Escape byte becomes the Escape key after 25 ms, so arrow keys over a slow SSH link are not mistaken for it.
+3. Mouse coordinates are 0-based cells with `(0, 0)` at the top left, the same orientation as `Display`.
 
 ## `unsafe`
 
