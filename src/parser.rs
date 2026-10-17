@@ -62,6 +62,14 @@ impl Parser {
         }
     }
 
+    /// Whether bytes are waiting for the rest of an escape sequence. After
+    /// [`Parser::next_event`] returns `None`, this is `true` if more input could
+    /// still complete an event, so the caller should wait a moment and then
+    /// call [`Parser::flush`].
+    pub fn has_pending(&self) -> bool {
+        self.start < self.buffer.len()
+    }
+
     /// Call when no more bytes are coming for a moment (for example after a
     /// short read timeout). A lone Escape byte could be the Escape key or the
     /// start of a longer sequence; this settles it as the Escape key.
@@ -537,6 +545,18 @@ mod tests {
     fn unknown_sequences_are_skipped_without_blocking_later_input() {
         assert_eq!(parse(b"\x1b[999zq"), vec![key(KeyCode::Char('q'))]);
         assert_eq!(parse(b"\x1b[<9;9;9yq"), vec![key(KeyCode::Char('q'))]);
+    }
+
+    #[test]
+    fn has_pending_is_true_only_while_bytes_wait_for_the_rest_of_a_sequence() {
+        let mut p = Parser::new();
+        assert!(!p.has_pending());
+        p.feed(b"\x1b[");
+        assert_eq!(p.next_event(), None);
+        assert!(p.has_pending());
+        p.feed(b"A");
+        assert!(p.next_event().is_some());
+        assert!(!p.has_pending());
     }
 
     #[test]

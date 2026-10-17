@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 mod event;
+mod input;
 mod parser;
 mod raw_mode;
 
