@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 mod art;
+mod clock;
 mod event;
 mod input;
 mod parser;

@@ -1,6 +1,7 @@
 //! What every art script needs and none should write: the frame loop, the
 //! pointer, and quitting.
 
+use crate::clock::FixedStep;
 use crate::{Display, Event, KeyCode, Mouse, MouseButton, MouseKind, Terminal};
 use std::io;
 use std::time::{Duration, Instant};
@@ -61,29 +62,35 @@ pub(crate) fn run_loop(mut frame: impl FnMut(&mut Display, f32, &Pointer)) -> io
     let mut display = Display::new(width, height.saturating_sub(1));
     let mut pointer = Pointer::default();
     let start = Instant::now();
-    let mut next_frame = start + FRAME;
+    // one step at a time: if we fall behind, do not burst to catch up
+    let mut clock = FixedStep::new(FRAME, 1);
+    let mut last = start;
 
     loop {
         frame(&mut display, start.elapsed().as_secs_f32(), &pointer);
         pointer.end_frame();
         terminal.draw(&display)?;
 
-        // spend the time until the next frame handling input
+        // spend the time until the next frame handling input. The clock is
+        // advanced on every wake-up, input included, so the wait always ends
+        // at the frame's due time rather than a full frame after each event.
         loop {
-            let wait = next_frame.saturating_duration_since(Instant::now());
-            match terminal.poll(wait)? {
+            let now = Instant::now();
+            let due = clock.advance(now.duration_since(last));
+            last = now;
+            if due > 0 {
+                break;
+            }
+            match terminal.poll(clock.until_next())? {
                 Some(Event::Key(key)) => {
                     if key.is_char('q') || key.is_ctrl('c') || key.code == KeyCode::Esc {
                         return Ok(());
                     }
                 }
                 Some(Event::Mouse(mouse)) => pointer.update(&mouse),
-                Some(_) => {}
-                None => break,
+                Some(_) | None => {}
             }
         }
-        // if we fell behind, do not try to catch up with a burst of frames
-        next_frame = (next_frame + FRAME).max(Instant::now());
     }
 }
 
