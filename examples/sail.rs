@@ -167,7 +167,7 @@ fn swells(progress: f32, phase: f32) -> [(f32, f32, f32); 4] {
     let p = unit(progress);
     let mut out = [(0.0, 1.0, 0.0); 4];
     for (i, slot) in out.iter_mut().enumerate() {
-        let nudge = 1.0 + 0.04 * (phase + i as f32 * 2.3).sin();
+        let nudge = 1.0 + 0.04 * math::sin(phase + i as f32 * 2.3);
         *slot = (
             lerp(CALM_HEIGHT[i], STORM_HEIGHT[i], p),
             lerp(CALM_WAVELENGTH[i], STORM_WAVELENGTH[i], p) * nudge,
@@ -188,7 +188,7 @@ fn sea(progress: f32, t: f32, phase: f32, rows: f32) -> Waves {
 
 /// [`sea`] with every swell's height multiplied by `scale` (the wave height knob).
 fn sea_scaled(progress: f32, t: f32, phase: f32, rows: f32, scale: f32) -> Waves {
-    let set = 1.0 + SET_DEPTH * (SET_SPEED * t + phase).sin();
+    let set = 1.0 + SET_DEPTH * math::sin(SET_SPEED * t + phase);
     let fit = swell_fit(progress, rows) * scale;
     let mut waves = Waves::new();
     for (height, wavelength, speed) in swells(progress, phase) {
@@ -451,7 +451,7 @@ impl Fireball {
     /// Carries a sinking fireball on by `dt`. Drag slows it, and it drifts down
     /// a little. When its time is up it is spent.
     fn sink(&mut self, dt: f32) {
-        let keep = (-SINK_DRAG * dt).exp();
+        let keep = math::exp(-SINK_DRAG * dt);
         self.vx *= keep;
         self.vy *= keep;
         self.y += (self.vy + SINK_DRIFT) * dt;
