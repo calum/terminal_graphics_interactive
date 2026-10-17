@@ -370,7 +370,6 @@ impl Screen {
     }
 
     /// Called by the game loop before drawing, to set the clock.
-    #[allow(dead_code)] // used by the game loop, which is the next step
     pub(crate) fn set_clock(&mut self, time: f32, tick: u64) {
         self.time = time;
         self.tick = tick;

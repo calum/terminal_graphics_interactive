@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `game::Game`, `Next`, `Context`, `Headless` and `run`: the scene-based game loop (fixed 60 updates a second, scenes for menus and pause, a headless runner for tests, Ctrl+C always quits and q/Esc belong to the game).
 - `game::Rng` (deterministic random numbers, the same on every machine), `game::Timer` (cooldowns and spawn clocks in seconds of game time), `game::Pool` (fixed-capacity object lists that never reallocate) and `game::Hit` (rectangle and circle collision tests).
 - `game::Screen` (a drawing surface with text, fills, bars and sprites, all clipped to the screen so nothing panics off screen) and `game::Sprite` (pictures from string literals, with transparent spaces, two-colour `paint` and `flipped` mirroring).
 - `game::Keys` (held, pressed and released keys, with timing-based fallback: a press is held for 300 ms, each OS repeat extends it by 100 ms, and real releases from the kitty protocol end it at once) and `game::Controls` (named actions bound to keys, so players can rebind them). Pure logic with an injected clock, so it is tested with no terminal.
