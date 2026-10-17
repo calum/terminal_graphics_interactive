@@ -21,3 +21,4 @@
 - End-to-end scenarios for the paint example and the window size on Windows, Linux and macOS.
 - `llms.txt`: a page for AI coding agents (what it is, when to use it and when not to, the API, easy mistakes, and a complete example). Its example is `examples/quickstart.rs`, which cargo compiles; `tests/llms.rs` checks the page against the API and the example against the file, and an end-to-end scenario runs the example in a real terminal.
 - `terminal_graphics_interactive::prelude::*` brings in the graphics and interactive types together.
+- `cargo run --example screensaver`: bouncing dots with fading trails (click adds a dot, any key quits). It shows the frame-timer loop: draw, handle input until the next frame is due, advance the animation.

@@ -68,6 +68,17 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn the_screensaver_animates_by_itself_and_any_key_quits() {
+            // nothing is sent until the first block is on screen, so a block
+            // appearing proves the frame loop draws without any input; a key
+            // then proves input is handled while animating
+            let pty = Pty::spawn(&example("screensaver"));
+            pty.expect("█");
+            pty.send(b"x");
+            assert_eq!(pty.exit_code(), 0);
+        }
+
+        #[test]
         fn the_quickstart_from_llms_txt_marks_a_clicked_cell_and_quits() {
             // this is the program an AI agent will copy from llms.txt
             let pty = Pty::spawn(&example("quickstart"));

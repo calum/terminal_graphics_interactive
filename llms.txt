@@ -73,7 +73,7 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-More examples: `cargo run --example paint` (a paint program) and `cargo run --example events` (prints every event).
+More examples: `cargo run --example paint` (a paint program), `cargo run --example screensaver` (bouncing dots with fading trails; shows the frame-timer loop: draw, handle input until the next frame is due, advance) and `cargo run --example events` (prints every event).
 
 ## Links
 
