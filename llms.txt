@@ -76,6 +76,50 @@ fn main() -> std::io::Result<()> {
 
 More examples: `cargo run --example paint` (a paint program), `cargo run --example screensaver` (bouncing dots with fading trails; shows the frame-timer loop: draw, handle input until the next frame is due, advance) and `cargo run --example events` (prints every event).
 
+## Making art and fun graphics in a few lines
+
+For animations, formulas and physics toys, do not write the loop yourself. `use terminal_graphics_interactive::prelude::*;` and use one of two entry points. Both start the terminal, run about 30 frames a second, track the mouse (including plain movement), quit on `q`, Esc or Ctrl+C, and put the terminal back afterwards.
+
+**`sketch(formula)` / `sketch_with(palette, formula)`** fills the window every frame. The formula runs for every cell and returns a number from -1.0 to 1.0, which is what `sin` and `cos` give, so no rescaling is needed. NaN and out-of-range numbers are clamped, never a crash. It is given a `Cell` with `x` (column), `y` (row, stretched by two so one unit looks as tall as one unit of `x` is wide, which keeps circles round), `t` (seconds since the start), `mouse_x`, `mouse_y` (same units as `x` and `y`), `mouse_down`, `width`, `height`, and `cell.dist_to_mouse()`.
+
+A `Palette` turns a number into a colour: `Palette::ocean()`, `fire()`, `rainbow()`, `mono()`, or your own with `Palette::new(&[Colour::Black, Colour::Red, ...])`, dark to bright. A terminal has 16 colours, so values between two colours are drawn with shade blocks (`░▒▓█`) for about four times as many steps. Fewer than two colours is repaired, not a panic. To colour cells yourself, `palette.shade(v)` (v from 0.0 to 1.0) and `palette.shade_signed(v)` (-1.0 to 1.0) return the `(character, foreground, background)` to give `display.set_pixel`.
+
+```rust
+use terminal_graphics_interactive::prelude::*;
+
+fn main() -> std::io::Result<()> {
+    // Move the mouse to send ripples across it. Press q to quit.
+    sketch_with(Palette::fire(), |cell| {
+        let ripple = cell.dist_to_mouse() * 0.25 - cell.t * 3.0;
+        ((cell.x * 0.15 + cell.t).sin() + (cell.y * 0.2 - cell.t * 0.7).sin() + ripple.sin()) / 3.0
+    })
+}
+```
+
+**`World::new()...run()`** is a physics playground described by chained settings: `.balls(n)` (how many, up to 64), `.size(radius)` (try 3.5 for big balls), `.gravity(g)` (try 0.02), `.mouse_pulls()` (the pointer attracts the balls, the right button pushes them away), `.trails()` (glowing tails) and `.palette(p)`. Balls bounce off the walls and off each other, and a click adds a ball. `World::new().run()` already looks good.
+
+```rust
+use terminal_graphics_interactive::prelude::*;
+
+fn main() -> std::io::Result<()> {
+    // The mouse pulls the balls in, the right button pushes them away, a click
+    // adds a ball. Press q to quit.
+    World::new()
+        .balls(5)
+        .size(3.5)
+        .gravity(0.02)
+        .mouse_pulls()
+        .trails()
+        .run()
+}
+```
+
+To test or benchmark art without a terminal, use the headless API: `sketch_frame(&mut display, &palette, t, &pointer, formula)` draws one frame of a sketch into a `Display`, and `world.simulation(seed)` (end a `World::new()` chain with `.simulation(1)` instead of `.run()`) gives a `Simulation` you advance with `resize(w, h)`, `step(&pointer)` and `render(&mut display)` and inspect with `positions()`. The same seed always gives the same world.
+
+Pointer movement with no button held is not reported by default; `sketch` and `World` turn it on. In your own loop, call `terminal.report_mouse_movement()`.
+
+To add a palette, an effect or a setting, see CONTRIBUTING.md.
+
 ## Links
 
 - Source and issues: https://github.com/calum/terminal_graphics_interactive

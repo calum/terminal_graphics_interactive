@@ -88,3 +88,13 @@ in a PR. Publishing cannot be undone, so:
   variable (variables are not masked in logs); `tests/ci_workflow.rs` checks this;
 - it only runs on a push to `master`, after the tests and the MSRV check pass;
 - run `cargo publish --dry-run` first.
+
+## Layout
+
+- `src/parser.rs`, `src/input.rs`, `src/terminal.rs`, `src/raw_mode/` - input, the session, raw mode (the only `unsafe`)
+- `src/art/` - the easy art API: `palette.rs` (colours), `sketch.rs` (formula art), `world.rs` (physics), `stage.rs` (the frame loop and pointer). The maths is pure and unit tested; only `stage::run_loop` needs a terminal
+- `examples/` - short programs people copy: `plasma`, `balls`, `paint`, `screensaver`, `events`, `quickstart`
+- `tests/support/mod.rs` - the end-to-end scenarios shared by `e2e_windows.rs` and `e2e_unix.rs`
+- `llms.txt` - the page for AI agents; `tests/llms.rs` keeps it, the README and the examples in step
+- `CONTRIBUTING.md` - how to add a palette, a `World` setting or an example; `tests/contributing.rs` keeps it honest
+- `docs/superpowers/specs/` - design notes

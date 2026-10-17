@@ -78,6 +78,22 @@ fn every_method_it_lists_exists_in_the_source() {
         "next_event",
         "flush",
         "enable",
+        "report_mouse_movement",
+        // the art API
+        "sketch",
+        "sketch_with",
+        "sketch_frame",
+        "dist_to_mouse",
+        "shade",
+        "shade_signed",
+        "balls",
+        "gravity",
+        "mouse_pulls",
+        "trails",
+        "palette",
+        "simulation",
+        "positions",
+        "run",
     ] {
         assert!(
             text.contains(method),
@@ -164,4 +180,67 @@ fn explains_that_pastes_are_one_event_and_that_matches_need_a_wildcard() {
         text.contains("`_ =>"),
         "Event can grow, so a match needs a `_ =>` arm"
     );
+}
+
+/// The code blocks in `llms.txt`, in order.
+fn code_blocks() -> Vec<String> {
+    let text = llms();
+    let mut blocks = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("```rust\n") {
+        let after = &rest[start + "```rust\n".len()..];
+        let end = after.find("```").expect("a code block that ends");
+        blocks.push(after[..end].trim().to_string());
+        rest = &after[end + 3..];
+    }
+    blocks
+}
+
+fn example(name: &str) -> String {
+    fs::read_to_string(root().join("examples").join(format!("{name}.rs")))
+        .unwrap_or_else(|_| panic!("examples/{name}.rs must exist"))
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn the_art_examples_are_the_real_plasma_and_balls_examples() {
+    let blocks = code_blocks();
+    assert!(
+        blocks.contains(&example("plasma")),
+        "llms.txt must contain examples/plasma.rs exactly"
+    );
+    assert!(
+        blocks.contains(&example("balls")),
+        "llms.txt must contain examples/balls.rs exactly"
+    );
+}
+
+#[test]
+fn explains_the_art_api_and_its_units_and_ranges() {
+    let text = llms();
+    for needle in [
+        "## Making art",
+        "-1.0 to 1.0",
+        "Palette::new",
+        "stretched",
+        "sketch_frame",
+        "`.simulation(",
+    ] {
+        assert!(
+            text.contains(needle),
+            "llms.txt does not mention {needle:?}"
+        );
+    }
+}
+
+#[test]
+fn the_readme_shows_the_real_plasma_and_balls_examples() {
+    let readme = fs::read_to_string(root().join("README.md")).unwrap();
+    for name in ["plasma", "balls"] {
+        assert!(
+            readme.contains(&example(name)),
+            "README.md must contain examples/{name}.rs exactly"
+        );
+    }
 }

@@ -2,17 +2,59 @@
 
 Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
 
-**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, a paint example, and [`llms.txt`](llms.txt) for AI coding agents. Next: a game example and terminal resize events.
+**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, an easy [art API](#make-art-in-a-few-lines) (formula animations and a physics world), and [`llms.txt`](llms.txt) for AI coding agents. Next: a game example and terminal resize events. Want to add a palette, an effect or an example? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Try it
 
 ```sh
-cargo run --example paint        # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
+cargo run --example plasma        # an animated plasma in one formula; move the mouse to make ripples
+cargo run --example balls         # five big bouncing balls; the mouse pulls them, right button pushes, click adds one
+cargo run --example paint         # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
 cargo run --example screensaver   # bouncing dots with fading trails; click to add one, any key quits
-cargo run --example events       # prints every key and mouse event
+cargo run --example events        # prints every key and mouse event
 ```
 
-It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`).
+It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`). Press `q` to quit.
+
+## Make art in a few lines
+
+Write the interesting part and nothing else. The library starts the terminal, runs the frame loop, tracks the mouse, quits on `q` and puts everything back.
+
+**A formula becomes an animation.** The closure runs for every cell every frame and returns a number from -1 to 1, which is what `sin` and `cos` give:
+
+```rust,no_run
+use terminal_graphics_interactive::prelude::*;
+
+fn main() -> std::io::Result<()> {
+    // Move the mouse to send ripples across it. Press q to quit.
+    sketch_with(Palette::fire(), |cell| {
+        let ripple = cell.dist_to_mouse() * 0.25 - cell.t * 3.0;
+        ((cell.x * 0.15 + cell.t).sin() + (cell.y * 0.2 - cell.t * 0.7).sin() + ripple.sin()) / 3.0
+    })
+}
+```
+
+`cell` has `x`, `y`, `t` (seconds), the mouse position and button, and the window size. `y` is stretched so a circle looks round. A terminal has only 16 colours, so numbers between two colours are drawn with shade blocks (`░▒▓█`) for about four times as many steps. Pick a `Palette` (`ocean`, `fire`, `rainbow`, `mono`) or make your own with `Palette::new(&[...])`.
+
+**A physics world in a few settings.** Balls bounce off the walls and each other, and a click adds one:
+
+```rust,no_run
+use terminal_graphics_interactive::prelude::*;
+
+fn main() -> std::io::Result<()> {
+    // The mouse pulls the balls in, the right button pushes them away, a click
+    // adds a ball. Press q to quit.
+    World::new()
+        .balls(5)
+        .size(3.5)
+        .gravity(0.02)
+        .mouse_pulls()
+        .trails()
+        .run()
+}
+```
+
+To test or measure art without a terminal, `sketch_frame(&mut display, &palette, t, &pointer, formula)` draws one frame into a `Display`, and `world.simulation(seed)` gives a `Simulation` you advance yourself.
 
 ## How it works
 
@@ -38,12 +80,23 @@ Raw mode cannot be done in safe Rust, so it is the only place `unsafe` appears: 
 
 "Before" had two problems that the benchmark exposed: parsed bytes were removed from the front of the buffer after every event (quadratic on large pastes), and key sequences allocated a `Vec`. A terminal produces nowhere near 10 million events a second, so parsing is far from being a bottleneck.
 
+`cargo bench --bench art` measures the art maths (the frame budget at 30 frames a second is 33,000 µs; the cost of printing the frame is in `terminal_graphics`' own benchmarks). Same machine, release build:
+
+| Per frame | 80x24 | 200x60 |
+|---|---:|---:|
+| plasma (3 sines and a distance per cell) | 93 µs | 786 µs |
+| one sine per cell | 80 µs | 523 µs |
+| 5 big balls with trails | 15 µs | 71 µs |
+| 64 small balls with trails | 30 µs | 83 µs |
+
+Even a 200 by 60 window with three sines per cell uses about 2% of a frame, so there is plenty of room for a heavier formula.
+
 ## Platform checks so far
 
 | Platform | Built and unit tested | Run against a real terminal |
 |---|---|---|
-| Windows | yes | yes: 8 end-to-end tests in a ConPTY pseudo console (`tests/e2e_windows.rs`), run in CI and locally. Not yet tried by a person in a real PowerShell or Windows Terminal window |
-| Linux, macOS | yes | yes: the same 8 end-to-end tests in a pty (`tests/e2e_unix.rs`), run in CI on Ubuntu and macOS |
+| Windows | yes | yes: 16 end-to-end tests in a ConPTY pseudo console (`tests/e2e_windows.rs`), run in CI and locally. Not yet tried by a person in a real PowerShell or Windows Terminal window |
+| Linux, macOS | yes | yes: the same 16 end-to-end tests in a pty (`tests/e2e_unix.rs`), run in CI on Ubuntu and macOS |
 
 ## License
 
