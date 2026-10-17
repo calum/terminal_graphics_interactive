@@ -68,6 +68,28 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn the_quickstart_from_llms_txt_marks_a_clicked_cell_and_quits() {
+            // this is the program an AI agent will copy from llms.txt
+            let pty = Pty::spawn(&example("quickstart"));
+            // The screen is blank until a click, so an X proves the whole path:
+            // click parsed, mapped to a cell, drawn. The program prints nothing
+            // that says it is ready, so click until it responds; a click sent
+            // too early is harmless.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !pty.text().contains('X') {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "no X appeared; the program printed {:?}",
+                    pty.text()
+                );
+                pty.send(b"\x1b[<0;10;5M");
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), 0);
+        }
+
+        #[test]
         fn the_window_size_is_found_by_asking_the_terminal() {
             // Terminal::start moves the cursor to the far corner, asks where it
             // is, and reads the answer; the harness answers like a terminal does

@@ -19,3 +19,5 @@
 - `Terminal` now uses the alternate screen and finds the window size by asking the terminal (`Terminal::size`), falling back to 80x24. `Terminal::draw(&display)` shows a `Display` at the top left, so `Mouse::cell_in(&display)` maps a mouse event straight to a cell. `Parser::expect_cursor_position` / `take_cursor_position` handle the size reply, which is otherwise indistinguishable from Ctrl+F3.
 - `cargo run --example paint`: a small paint program (strokes are joined into lines so fast drags leave no gaps, right button erases, 1-8 or scroll picks a colour).
 - End-to-end scenarios for the paint example and the window size on Windows, Linux and macOS.
+- `llms.txt`: a page for AI coding agents (what it is, when to use it and when not to, the API, easy mistakes, and a complete example). Its example is `examples/quickstart.rs`, which cargo compiles; `tests/llms.rs` checks the page against the API and the example against the file, and an end-to-end scenario runs the example in a real terminal.
+- `terminal_graphics_interactive::prelude::*` brings in the graphics and interactive types together.
