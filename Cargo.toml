@@ -1,0 +1,19 @@
+[package]
+name = "terminal_graphics_interactive"
+version = "0.1.0"
+authors = ["calum"]
+edition = "2021"
+readme = "README.md"
+keywords = ["terminal", "ansi", "mouse", "input", "tui"]
+categories = ["command-line-interface", "graphics"]
+rust-version = "1.70"
+repository = "https://github.com/calum/terminal_graphics_interactive"
+license = "MIT OR Apache-2.0"
+description = "Keyboard and mouse input for terminal_graphics: build interactive terminal games, art and animations. Almost no unsafe."
+
+[dependencies]
+terminal_graphics = "1"
+
+[[bench]]
+name = "parser"
+harness = false

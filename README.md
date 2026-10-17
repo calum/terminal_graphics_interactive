@@ -1,0 +1,48 @@
+# terminal_graphics_interactive
+
+Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
+
+**Status: early (0.1).** Done: the input parser and raw terminal mode. Next: an event loop (`poll` with a timeout), mapping mouse positions to `Display` cells, and a first paint-program example.
+
+## Try it
+
+```sh
+cargo run --example events
+```
+
+Click, drag, scroll and type in the window; each event is printed. `q` or Ctrl+C quits. It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`).
+
+## How it works
+
+1. `RawMode::enable()` puts the terminal in raw mode until the guard is dropped.
+2. Print `MOUSE_ON` to ask the terminal to report the mouse; print `MOUSE_OFF` when done.
+3. Read bytes from stdin and give them to a `Parser`; it yields `Event::Key` and `Event::Mouse` values. Mouse coordinates are 0-based cells with `(0, 0)` at the top left, the same orientation as `Display`.
+
+## `unsafe`
+
+Raw mode cannot be done in safe Rust, so it is the only place `unsafe` appears: three libc calls on Unix (`src/raw_mode/unix.rs`) and three `kernel32` calls on Windows (`src/raw_mode/windows.rs`), each with a `// SAFETY:` comment. Everything else is safe Rust, and `tests/unsafe_audit.rs` fails the build if `unsafe` appears anywhere else.
+
+## Performance
+
+`cargo bench` runs `benches/parser.rs`, which uses only `std`. Median of 15 samples on one machine (Windows 11, release build), parsing 10,000 events fed in chunks:
+
+| Stream | Chunk | Before | Now |
+|---|---|---:|---:|
+| mouse drag (SGR) | 64 B | 44 ns/event | 41 ns/event |
+| mouse drag (SGR) | 4 KB | 134 ns/event | 37 ns/event |
+| mouse drag (SGR) | 1 MB paste | 1630 ns/event | 85 ns/event |
+| keyboard | 64 B | 102 ns/event | 28 ns/event |
+| keyboard | 1 MB paste | 415 ns/event | 27 ns/event |
+
+"Before" had two problems that the benchmark exposed: parsed bytes were removed from the front of the buffer after every event (quadratic on large pastes), and key sequences allocated a `Vec`. A terminal produces nowhere near 10 million events a second, so parsing is far from being a bottleneck.
+
+## Platform checks so far
+
+| Platform | Built and unit tested | Run against a real terminal |
+|---|---|---|
+| Windows | yes | not yet (needs a person at a console) |
+| Linux, macOS | type-checked (`cargo check --target`) | not yet |
+
+## License
+
+Licensed under either of MIT or Apache-2.0 at your option.
