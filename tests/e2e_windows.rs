@@ -145,25 +145,25 @@ struct Pty {
     output: Arc<Mutex<Vec<u8>>>,
 }
 
-fn events_example() -> PathBuf {
-    // target/debug/deps/<test>.exe -> target/debug/examples/events.exe
+fn example(name: &str) -> PathBuf {
+    // target/debug/deps/<test>.exe -> target/debug/examples/<name>.exe
     // `cargo test --test e2e_windows` does not build examples, so build it here
     static BUILD: std::sync::Once = std::sync::Once::new();
     BUILD.call_once(|| {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let status = std::process::Command::new(cargo)
-            .args(["build", "--example", "events"])
+            .args(["build", "--examples"])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .expect("could not run cargo");
-        assert!(status.success(), "building the events example failed");
+        assert!(status.success(), "building the examples failed");
     });
 
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
     path.push("examples");
-    path.push("events.exe");
+    path.push(format!("{name}.exe"));
     assert!(path.exists(), "{} was not built", path.display());
     path
 }

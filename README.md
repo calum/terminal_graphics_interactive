@@ -2,21 +2,22 @@
 
 Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
 
-**Status: early (0.1).** Done: the input parser, raw terminal mode, and `Terminal`, an interactive session with `poll(timeout)`. Next: mapping mouse positions to `Display` cells (alternate screen, terminal size without extra unsafe), a paint-program example, and `llms.txt`.
+**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, and a paint example. Next: `llms.txt`, more examples (a game, a screensaver), and terminal resize events.
 
 ## Try it
 
 ```sh
-cargo run --example events
+cargo run --example paint     # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
+cargo run --example events    # prints every key and mouse event
 ```
 
-Click, drag, scroll and type in the window; each event is printed. `q` or Ctrl+C quits. It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`).
+It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`).
 
 ## How it works
 
-1. `Terminal::start()` puts the terminal in raw mode, turns on mouse reporting and hides the cursor. Dropping it undoes all of that, even on panic. `terminal.poll(timeout)` returns the next event, or `None` when the time runs out (your cue to draw the next frame); `terminal.wait()` blocks. (`RawMode`, `Parser`, `MOUSE_ON` and `MOUSE_OFF` are public too if you want the pieces.)
+1. `Terminal::start()` switches to the alternate screen (your scrollback comes back on exit), puts the terminal in raw mode, turns on mouse reporting, hides the cursor and finds the window size. Dropping it undoes all of that, even on panic. `terminal.poll(timeout)` returns the next event, or `None` when the time runs out (your cue to draw the next frame); `terminal.wait()` blocks. (`RawMode`, `Parser`, `MOUSE_ON` and `MOUSE_OFF` are public too if you want the pieces.)
 2. Events are `Event::Key` and `Event::Mouse`. A lone Escape byte becomes the Escape key after 25 ms, so arrow keys over a slow SSH link are not mistaken for it.
-3. Mouse coordinates are 0-based cells with `(0, 0)` at the top left, the same orientation as `Display`.
+3. `terminal.draw(&display)` shows a `Display` at the top left of the window, so mouse coordinates (0-based cells, `(0, 0)` at the top left) line up with display cells: `mouse.cell_in(&display)` gives the cell under the pointer. Make the display at most `terminal.size()` wide and one row shorter than it is high.
 
 ## `unsafe`
 

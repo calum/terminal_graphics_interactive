@@ -43,7 +43,7 @@ pub fn strip_escapes(bytes: &[u8]) -> String {
 macro_rules! e2e_scenarios {
     () => {
         fn started() -> Pty {
-            let pty = Pty::spawn(&events_example());
+            let pty = Pty::spawn(&example("events"));
             pty.expect("q or Ctrl+C quits");
             pty
         }
@@ -52,6 +52,19 @@ macro_rules! e2e_scenarios {
         fn the_example_starts_in_a_real_console() {
             // RawMode::enable succeeded, or the banner would never print
             started();
+        }
+
+        #[test]
+        fn paint_draws_its_screen_with_terminal_draw_then_quits_cleanly() {
+            // the paint example shows a status line on the last row of its
+            // display; seeing it proves `Terminal::draw` output reaches a real
+            // terminal, and exit code 0 after `q` proves cleanup ran
+            let pty = Pty::spawn(&example("paint"));
+            pty.expect("q: quit");
+            // a click and a drag, which must not break anything
+            pty.send(b"\x1b[<0;10;5M\x1b[<32;20;5M\x1b[<0;20;5m");
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), 0);
         }
 
         #[test]
