@@ -22,7 +22,7 @@
 
 mod compile;
 mod eval;
-mod ir;
+pub mod ir;
 pub mod lexer;
 
 use std::cell::RefCell;
