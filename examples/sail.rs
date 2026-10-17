@@ -7,6 +7,7 @@
 //!
 //! A and D (or the arrows) steer, p or Esc pauses, q quits.
 
+use std::cell::RefCell;
 use std::f32::consts::{PI, TAU};
 use terminal_graphics_interactive::game::*;
 
@@ -2012,6 +2013,208 @@ impl Game for Play {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Playing together: the same rules on several machines
+// ---------------------------------------------------------------------------
+
+/// What every machine in a match must agree on before it starts. The host
+/// makes it and sends it with `announce`; the others read it with
+/// `await_message`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // used by the `sail_together` example, which includes this file
+pub struct Settings {
+    /// The seed of the shared random numbers.
+    pub seed: u64,
+    /// The size of the sea in columns and rows. Every window must be at least
+    /// this big (one row more, for the terminal).
+    pub width: u32,
+    pub rows: u32,
+    /// How many steps a key press waits before it takes effect.
+    pub delay: u32,
+}
+
+#[allow(dead_code)]
+impl Settings {
+    /// A sea of 80 by 24 and an input delay of 3 steps (50 ms).
+    pub fn new(seed: u64) -> Settings {
+        Settings {
+            seed,
+            width: 80,
+            rows: 24,
+            delay: 3,
+        }
+    }
+}
+
+impl Encode for Settings {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.seed.encode(out);
+        self.width.encode(out);
+        self.rows.encode(out);
+        self.delay.encode(out);
+    }
+}
+
+impl Decode for Settings {
+    fn decode(r: &mut Reader<'_>) -> Result<Settings, DecodeError> {
+        Ok(Settings {
+            seed: r.u64()?,
+            width: r.u32()?,
+            rows: r.u32()?,
+            delay: r.u32()?,
+        })
+    }
+}
+
+/// Where a match stands, for the words shown over the sea.
+#[derive(Debug)]
+enum Status {
+    Playing,
+    /// Waiting for these players' inputs to arrive.
+    Waiting(Vec<PlayerId>),
+    /// Every boat is lost.
+    Over,
+    /// The match cannot go on; these lines say why.
+    Stopped(Vec<String>),
+}
+
+/// A match: the same sea on every machine, one boat for each player.
+struct Together<T: Transport> {
+    lock: Lockstep<SailSim, T>,
+    view: View,
+    look: Look,
+    controls: Controls<Action>,
+    size: (u32, u32),
+    me: usize,
+    status: Status,
+    /// The sea is drawn here at its agreed size, then copied into the window.
+    world: RefCell<Screen>,
+}
+
+impl<T: Transport> Together<T> {
+    fn new(transport: T, config: Config, settings: &Settings) -> Together<T> {
+        let config = config.seed(settings.seed).delay(settings.delay);
+        let size = (settings.width.max(1), settings.rows.max(1));
+        let mut setup = Rng::new(settings.seed ^ 0x5a11);
+        let sim = SailSim::new(config.players(), Env::new(size), &mut setup);
+        let me = config.me().index();
+        Together {
+            view: View::new(settings.seed ^ me as u64),
+            look: Look::new(),
+            controls: controls(),
+            size,
+            me,
+            status: Status::Playing,
+            world: RefCell::new(Screen::new(size.0, size.1)),
+            lock: Lockstep::new(sim, transport, config),
+        }
+    }
+
+    /// The lines to show in a panel over the sea, if there is something to say.
+    fn words(&self) -> Option<Vec<String>> {
+        match &self.status {
+            Status::Playing => None,
+            Status::Waiting(players) => {
+                let names: Vec<String> = players.iter().map(|p| (p.0 + 1).to_string()).collect();
+                let noun = if names.len() == 1 {
+                    "player"
+                } else {
+                    "players"
+                };
+                Some(vec![format!("waiting for {noun} {}", names.join(" and "))])
+            }
+            Status::Over => Some(vec![
+                OVER_TITLE.to_string(),
+                format!("score {}", self.lock.sim().score()),
+                "q: quit".to_string(),
+            ]),
+            Status::Stopped(lines) => {
+                let mut lines = lines.clone();
+                lines.push("q: quit".to_string());
+                Some(lines)
+            }
+        }
+    }
+}
+
+impl<T: Transport> Game for Together<T> {
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Char('q')) {
+            let _ = self.lock.leave();
+            return Next::quit();
+        }
+        if matches!(self.status, Status::Over | Status::Stopped(_)) {
+            return Next::stay();
+        }
+        let across = self.controls.axis(ctx.keys, Action::Left, Action::Right);
+        let view = &mut self.view;
+        let result = self.lock.tick(Steer(across as i8), |sim| view.observe(sim));
+        self.status = match result {
+            Ok(Progress::Advanced(_)) if self.lock.sim().over() => Status::Over,
+            Ok(Progress::Advanced(_)) => Status::Playing,
+            Ok(Progress::Stalled { waiting_for }) => Status::Waiting(waiting_for),
+            Ok(Progress::Desync(d)) => Status::Stopped(vec![
+                "the two games drifted apart".to_string(),
+                format!("between step {} and step {}", d.last_agreed, d.tick),
+                "are you both running the same version?".to_string(),
+            ]),
+            Ok(Progress::Lost(player)) => {
+                Status::Stopped(vec![format!("player {} left the game", player.0 + 1)])
+            }
+            Err(e) => Status::Stopped(vec![format!("the connection failed: {e}")]),
+        };
+        Next::stay()
+    }
+
+    fn draw(&self, screen: &mut Screen) {
+        let (width, rows) = self.size;
+        screen.clear(Colour::Black);
+        if screen.width() < width as i32 || screen.height() < rows as i32 {
+            let text = format!(
+                "make the window at least {width} columns by {} rows (it is {} by {})",
+                rows + 1,
+                screen.width(),
+                screen.height() + 1
+            );
+            screen.text_centred(screen.height() / 2, &text, Colour::BrightWhite);
+            return;
+        }
+        {
+            let mut world = self.world.borrow_mut();
+            world.clear(Colour::Black);
+            draw_round(
+                &mut world,
+                &self.look,
+                self.lock.sim(),
+                &self.view,
+                self.me,
+                0,
+            );
+            world.finish_frame();
+            screen.blit(&world, (screen.width() - width as i32) / 2, 0);
+        }
+        if let Some(lines) = self.words() {
+            let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+            let panel = Panel::new(screen, longest as i32, lines.len() as i32, rows as i32 / 4);
+            panel.draw(screen);
+            for (i, line) in lines.iter().enumerate() {
+                panel.text_line(screen, i as i32, line, Colour::BrightWhite);
+            }
+        }
+    }
+}
+
+/// A match over `transport`: `config` says how many players there are and
+/// which one this machine is; `settings` is what the host announced. Play it
+/// with `run`. The host is player 0; see `examples/sail_together.rs`.
+#[allow(dead_code)]
+pub fn together<T: Transport + 'static>(
+    transport: T,
+    config: Config,
+    settings: &Settings,
+) -> impl Game {
+    Together::new(transport, config, settings)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2051,7 +2254,7 @@ mod tests {
         }
 
         /// Runs one update of `play` and returns what it asked for.
-        fn update(&mut self, play: &mut Play) -> Next {
+        fn update(&mut self, play: &mut impl Game) -> Next {
             let now = self.now();
             self.keys.tick(now);
             let mut ctx = Context {
@@ -3538,6 +3741,134 @@ mod tests {
             );
         }
         assert_eq!(Steer(-1).to_bytes().len(), 1);
+    }
+
+    /// Two machines playing together over an in-process network.
+    fn match_of_two(seed: u64) -> (Together<Local>, Together<Local>) {
+        let mut ends = Local::network(2).into_iter();
+        let settings = Settings::new(seed);
+        let make =
+            |end, me| Together::new(end, Config::new(2, PlayerId(me)).star(false), &settings);
+        (make(ends.next().unwrap(), 0), make(ends.next().unwrap(), 1))
+    }
+
+    /// One update of `game` on a screen 80 columns by 24 rows.
+    fn update_of(rig: &mut Rig, game: &mut impl Game) -> Next {
+        rig.update(game)
+    }
+
+    fn drawn_text(game: &impl Game, width: u32, height: u32) -> String {
+        let screen = painted(game, width, height);
+        let (w, h) = screen.size();
+        let display = screen.display();
+        let mut out = String::new();
+        for y in 0..h as isize {
+            for x in 0..w as isize {
+                out.push(display.pixel(x, y).unwrap().character());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn two_machines_sail_the_same_sea_and_steer_their_own_boats() {
+        let (mut one, mut two) = match_of_two(5);
+        let (mut rig_one, mut rig_two) = (Rig::new((80, 24)), Rig::new((80, 24)));
+        rig_one.press(KeyCode::Right);
+        rig_two.press(KeyCode::Left);
+        for _ in 0..900 {
+            update_of(&mut rig_one, &mut one);
+            update_of(&mut rig_two, &mut two);
+        }
+        assert!(matches!(one.status, Status::Playing), "{:?}", one.status);
+        assert!(matches!(two.status, Status::Playing), "{:?}", two.status);
+        let (a, b) = (one.lock.sim(), two.lock.sim());
+        assert!(a.elapsed > 10.0, "{} s", a.elapsed);
+        // each machine steered its own boat, and the other machine saw it
+        assert!(a.sailors[0].boat.x > a.sailors[1].boat.x);
+        assert!((a.sailors[0].boat.x - b.sailors[0].boat.x).abs() < 3.0);
+        assert!((a.sailors[1].boat.x - b.sailors[1].boat.x).abs() < 3.0);
+    }
+
+    #[test]
+    fn the_hud_names_every_player_and_marks_nothing_for_a_single_boat() {
+        let (mut one, mut two) = match_of_two(5);
+        let (mut rig_one, mut rig_two) = (Rig::new((80, 24)), Rig::new((80, 24)));
+        for _ in 0..30 {
+            update_of(&mut rig_one, &mut one);
+            update_of(&mut rig_two, &mut two);
+        }
+        let text = drawn_text(&one, 80, 24);
+        let row_one: &str = text.lines().nth(1).unwrap();
+        assert!(
+            row_one.contains("P1") && row_one.contains("P2"),
+            "{row_one}"
+        );
+        let solo = drawn_text(&Play::new(1, 0), 80, 24);
+        assert!(!solo.lines().nth(1).unwrap().contains("P1"));
+    }
+
+    #[test]
+    fn a_machine_whose_partner_is_silent_says_who_it_is_waiting_for() {
+        let (mut one, _two) = match_of_two(5);
+        let mut rig = Rig::new((80, 24));
+        for _ in 0..40 {
+            update_of(&mut rig, &mut one);
+        }
+        let text = drawn_text(&one, 80, 24);
+        assert!(text.contains("waiting for player 2"), "{text}");
+    }
+
+    #[test]
+    fn leaving_with_q_stops_the_other_machine_with_a_clear_message() {
+        let (mut one, mut two) = match_of_two(5);
+        let (mut rig_one, mut rig_two) = (Rig::new((80, 24)), Rig::new((80, 24)));
+        for _ in 0..30 {
+            update_of(&mut rig_one, &mut one);
+            update_of(&mut rig_two, &mut two);
+        }
+        rig_two.press(KeyCode::Char('q'));
+        assert!(matches!(update_of(&mut rig_two, &mut two), Next::Quit));
+        rig_one.release(KeyCode::Char('q'));
+        for _ in 0..40 {
+            update_of(&mut rig_one, &mut one);
+        }
+        let text = drawn_text(&one, 80, 24);
+        assert!(text.contains("player 2 left the game"), "{text}");
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_sea_says_how_big_it_must_be() {
+        let (one, _two) = match_of_two(5);
+        let text = drawn_text(&one, 60, 10);
+        assert!(text.contains("at least 80 columns by 25 rows"), "{text}");
+    }
+
+    #[test]
+    fn once_the_match_has_ended_nothing_more_runs() {
+        let (mut one, mut two) = match_of_two(5);
+        let (mut rig_one, mut rig_two) = (Rig::new((80, 24)), Rig::new((80, 24)));
+        for _ in 0..30 {
+            update_of(&mut rig_one, &mut one);
+            update_of(&mut rig_two, &mut two);
+        }
+        one.status = Status::Over;
+        let frozen = one.lock.sim().elapsed;
+        for _ in 0..30 {
+            update_of(&mut rig_one, &mut one);
+            update_of(&mut rig_two, &mut two);
+        }
+        assert!(matches!(one.status, Status::Over));
+        assert_eq!(one.lock.sim().elapsed, frozen);
+    }
+    #[test]
+    fn the_end_of_the_round_shows_the_score_and_how_to_leave() {
+        let (mut one, _two) = match_of_two(5);
+        one.status = Status::Over;
+        let text = drawn_text(&one, 80, 24);
+        assert!(text.contains("the sea wins this time"), "{text}");
+        assert!(text.contains("q: quit"), "{text}");
     }
     #[test]
     fn the_tuning_has_the_three_knobs_at_their_defaults() {
