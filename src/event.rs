@@ -164,8 +164,35 @@ impl Mouse {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Event {
-    /// A key was pressed.
+    /// A key was pressed (or is repeating while held).
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::{Event, Key, KeyCode};
+    ///
+    /// let event = Event::Key(Key::new(KeyCode::Char('a')));
+    /// match event {
+    ///     Event::Key(key) => assert!(key.is_char('a')),
+    ///     _ => {}
+    /// }
+    /// ```
     Key(Key),
+    /// A key was released. Only terminals that support the kitty keyboard
+    /// protocol send these (kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2,
+    /// recent Windows Terminal), and only after the program asks for them with
+    /// `Terminal::enable_key_release`. Other terminals never send this event,
+    /// so a game should not depend on it. Keys held down send repeats as
+    /// [`Event::Key`], not as key releases.
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::{Event, Key, KeyCode};
+    ///
+    /// let event = Event::KeyUp(Key::new(KeyCode::Left));
+    /// match event {
+    ///     Event::KeyUp(key) => assert_eq!(key.code, KeyCode::Left),
+    ///     _ => {}
+    /// }
+    /// ```
+    KeyUp(Key),
     /// The mouse did something.
     Mouse(Mouse),
     /// Text was pasted. It arrives as one event, not as key presses, so pasting

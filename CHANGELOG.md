@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Event::KeyUp(Key)` and parsing of the kitty keyboard protocol: key release events from terminals that support it (kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2, recent Windows Terminal), with key repeats still arriving as `Event::Key`. Enabling the protocol (`Terminal::enable_key_release`) comes later.
 - `Terminal::draw` now sends only the cells that changed; the first call draws everything. New public `Renderer` writes diffed frames to any `Write` (`Renderer::draw_to`, `Renderer::invalidate`). `cargo bench --bench render` compares it with a full redraw; see the README.
 - `Terminal`: an interactive session. `Terminal::start()` enters raw mode,
   turns on mouse reporting and hides the cursor, and reads input on a
