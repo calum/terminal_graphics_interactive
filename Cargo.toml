@@ -39,3 +39,9 @@ test = true
 name = "glow"
 path = "examples/glow.rs"
 test = true
+
+# The smallest game, shown on the AI page (llms.txt) and in the README.
+[[example]]
+name = "quickgame"
+path = "examples/quickgame.rs"
+test = true

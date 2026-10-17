@@ -67,6 +67,52 @@ can copy and change.
    scenario can fail by breaking the code on purpose, then undo that.
 3. List it in the README.
 
+## Add a game example
+
+A game example is a short program in `examples/` that plays with `Game`, `Next`
+and friends from `game::*`. Start from [examples/glow.rs](examples/glow.rs), or
+[examples/quickgame.rs](examples/quickgame.rs) for the smallest one.
+
+1. Put it in `examples/NAME.rs` and import only
+   `use terminal_graphics_interactive::game::*;` (it brings in the art prelude
+   too).
+2. Give it a `#[cfg(test)] mod tests` that plays it headless with `Headless`:
+   the title shows how to start, a held key moves the player, and the round
+   ends. `Headless::new(game).size(40, 12)`, `tap`, `press`, `step` and `text`
+   are enough.
+3. Declare it in [Cargo.toml](Cargo.toml) with `test = true`, as `glow` is:
+
+   ```toml
+   [[example]]
+   name = "glow"
+   path = "examples/glow.rs"
+   test = true
+   ```
+
+   Then `cargo test --example NAME` runs its tests.
+4. A new platform behaviour (raw mode, key release, the window size) is not
+   supported until a pty test covers it. Add one to
+   [tests/e2e_unix.rs](tests/e2e_unix.rs), next to the `glow` tests, and to
+   `tests/e2e_windows.rs` for Windows.
+5. Add a line to [CHANGELOG.md](CHANGELOG.md) under "Unreleased", list the game
+   in the [README](README.md), and in [llms.txt](llms.txt) if it teaches
+   something new.
+
+## Add a game building block
+
+A building block is a small helper type in `src/game/`, such as `Timer` or
+`Pool`. It must stay pure: no terminal, no clock except the time it is given,
+and no allocation in steady use where it can be avoided. Then:
+
+1. Write its unit tests first, in the same file, for the edge cases (zero,
+   negative, empty, full).
+2. Give every public item a doc comment with a runnable example: a doc example,
+   so the documentation is the test as well.
+3. Declare the module in [src/game/mod.rs](src/game/mod.rs) and re-export the
+   type there, so `game::*` brings it in.
+4. Add it to the games section of [llms.txt](llms.txt) with one line on what it
+   is for. `tests/llms.rs` checks that the functions it lists exist.
+
 ## Update the GIFs
 
 The animations in the README are made by a Rust program, so anyone can rebuild

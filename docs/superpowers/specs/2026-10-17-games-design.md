@@ -1,6 +1,22 @@
 # Terminal Games
 
-Status: proposal for review. Nothing here is built yet.
+## Status
+
+Phases 1 to 3 are built. Phase 4 onward is not.
+
+- **Phase 1, built:** a shared fixed timestep clock (`clock::FixedStep`, used by the game loop and by the art stage) and a diffing `Renderer` behind `Terminal::draw`, with a benchmark and its numbers in the README.
+- **Phase 2, built:** key release events from the kitty keyboard protocol, `Keys` (held, pressed and released; timed where the terminal sends no releases) and `Controls` (named actions that can be rebound).
+- **Phase 3, built:** the core game API (`Game`, `Next`, `Context`, `Screen`, `Sprite`, `Rng`, `Timer`, `Pool`, `Hit`), `run`, the `glow` and `quickgame` examples, and the games section of `llms.txt`.
+
+`Headless` was not in the first sketch. It runs the same `Game` code with no terminal, so tests, replays and AI agents can play a game and read back what it drew. It is the first step toward the headless `Sim` and bot play in phase 6.
+
+Not done yet:
+
+- **Phase 4, art in games:** art backdrops in sub-regions (the region argument for `sketch_frame`), `Screen::backdrop`, `Particles`, and the flagship `sail`.
+- **Phase 5, the website:** the games page, `web_games`, the tuner and touch controls.
+- **Phase 6, multiplayer:** `Sim`, `Encode`/`Decode`, the `Local` and `Tcp` transports, lockstep and desync hashes.
+- **Real-terminal verification on Windows and macOS:** no person has run the games there yet, and `quickgame` has no pty test.
+- **Tuning the feel of `glow`:** the speeds, key timeouts and ripple strength are first guesses.
 
 ## Why
 
@@ -77,8 +93,8 @@ struct Menu;
 struct Sail { boat: Boat, fireballs: Vec<Fireball>, rng: Rng, score: u32 }
 
 impl Game for Menu {
-    fn update(&mut self, ctx: &mut Context) -> Next {
-        if ctx.input.pressed(KeyCode::Enter) { return Next::switch(Sail::new(ctx.seed())); }
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Enter) { return Next::switch(Sail::new(ctx.seed)); }
         Next::stay()
     }
     fn draw(&self, screen: &mut Screen) {
@@ -95,14 +111,14 @@ fn main() -> std::io::Result<()> { run(Menu) }
 
 | Piece | What it is |
 | --- | --- |
-| `Game` trait | `update(&mut self, &mut Context) -> Next` and `draw(&self, &mut Screen)`. Both have defaults, so a screen can be only a `draw`. |
+| `Game` trait | `update(&mut self, ctx: &mut Context<'_>) -> Next` and `draw(&self, &mut Screen)`. Both have defaults, so a screen can be only a `draw`. |
 | `Next` | What happens after an update: `stay()`, `switch(game)`, `push(game)` (pause over play), `pop()`, `quit()`. A stack of boxed `Game`s is the scene system; there is no scene graph. |
-| `Context` | Everything an update needs and nothing it should own: `input`, `dt` (a fixed step, always the same number), `tick` (frame count), `size`, `seed`. |
-| `Input` | `pressed(key)` (this tick), `held(key)` (see above), `axis(left, right)` -> -1/0/1, `pointer` (the art `Pointer`), `actions`. A `Controls` map binds named actions to keys so players can rebind. |
-| `Screen` | A `Display` plus drawing helpers: `sprite`, `text`, `text_centred`, `rect`, `bar`, `backdrop`, `particles`, and `half_blocks()` for twice the vertical resolution (the `▀` trick). |
-| `Rng` | Small seeded xorshift, no allocation, same output on every platform. |
-| `Sprite` | A grid of characters and colours made from a string literal; flip and animate by frames. |
-| `Timer`, `Shape` | Cooldowns and tiny collision tests (rect, circle). No physics engine. |
+| `Context` | Everything an update needs and nothing it should own: `keys`, `pointer`, `dt` (a fixed step, always 1/60), `tick` (frame count), `size`, and `seed` (a field). `time()` is `tick * dt`. |
+| `Keys` and `Controls` | `Keys` gives `pressed(key)` (this tick), `held(key)` (see above), `released(key)` and `axis(negative, positive)` -> -1/0/1. `Controls` binds named actions to keys so players can rebind them, and asks `held(&keys, action)`. |
+| `Screen` | A `Display` plus drawing helpers: `clear`, `put`, `fill`, `bar`, `sprite`, `text`, `text_centred`, `put_on`, plus `time()` and `tick()`. Everything is clipped to the screen. `backdrop`, `particles` and `half_blocks()` (twice the vertical resolution, the `▀` trick) are phase 4. |
+| `Rng` | Small seeded splitmix64 generator (`range_i32`, `f32`, `chance`, `pick`, `shuffle`), no allocation, same output on every platform. |
+| `Sprite` | A grid of characters and colours made from a string literal; `paint` recolours it and `flipped` mirrors it. Frame animation is not built yet. |
+| `Timer`, `Hit` | Cooldowns and tiny collision tests: `Hit` is an enum with `Hit::rect` and `Hit::circle`. No physics engine. |
 | `run(game)` | Starts the `Terminal`, runs the loop, restores everything. Same quitting rules as art (Ctrl+C always works; `q` and Esc are the game's to use, so `run` does **not** swallow them). |
 
 Design rules:
@@ -115,6 +131,8 @@ Design rules:
   motion if the game wants it.
 - **`draw` takes `&self`.** Drawing cannot change the game. That one rule is what
   makes the networking and testing below possible.
+
+As built, the sketch differs in three places: input is `ctx.keys` (and `ctx.pointer`), `ctx.seed` is a field, and `backdrop` and `title` are phase 4 helpers that do not exist yet. The rest is the API you can use today.
 
 ### Using the art modules in games
 

@@ -62,6 +62,41 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
+## Terminal Games
+
+**Make games in your terminal.** A game is a set of screens (a title, a play screen, a pause, a game over). Each one is a `Game` that updates 60 times a second, reads held keys and the mouse, and draws on a `Screen`. The crate also brings random numbers, timers, object pools and collision shapes, and `Headless` runs a game with no terminal, so tests can play it.
+
+Play the two examples:
+
+```sh
+cargo run --example glow        # a light drifts through a plasma sky; touch the motes
+cargo run --example quickgame   # steer a @ and collect the * stars for 20 seconds
+```
+
+This is the shape of `quickgame`: a title that switches to the play screen on Enter. The rest is in [examples/quickgame.rs](examples/quickgame.rs):
+
+```rust
+use terminal_graphics_interactive::game::*;
+
+fn main() -> std::io::Result<()> {
+    run(Title { score: None })
+}
+
+impl Game for Title {
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Enter) {
+            Next::switch(Play::new(ctx.seed))
+        } else {
+            Next::stay()
+        }
+    }
+}
+```
+
+What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the website for games is coming.
+
+To test a game without a terminal, use `Headless`. It runs the same updates as `run`: you press keys, step time and read back what was drawn, as `tests/game_api.rs` and the tests in `examples/quickgame.rs` do.
+
 ## Add the mouse and keyboard to anything
 
 Under the art API is `Terminal`: a full-screen session that gives you key presses, mouse clicks, drags, scrolling and pastes as events, and a window to draw a `Display` in. `poll` doubles as the frame timer, and `mouse.cell_in(&display)` turns a mouse position into a cell:

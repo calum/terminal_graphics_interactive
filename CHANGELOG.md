@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `llms.txt`, README and CONTRIBUTING cover the games section; new example quickgame.
 - `cargo run --example glow`: a game of light and plasma (title, play, pause and game-over scenes; the sky ripples when you collect motes).
 - `game::Game`, `Next`, `Context`, `Headless` and `run`: the scene-based game loop (fixed 60 updates a second, scenes for menus and pause, a headless runner for tests, Ctrl+C always quits and q/Esc belong to the game).
 - `game::Rng` (deterministic random numbers, the same on every machine), `game::Timer` (cooldowns and spawn clocks in seconds of game time), `game::Pool` (fixed-capacity object lists that never reallocate) and `game::Hit` (rectangle and circle collision tests).
