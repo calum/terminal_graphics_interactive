@@ -235,9 +235,9 @@ fn explains_the_art_api_and_its_units_and_ranges() {
 }
 
 #[test]
-fn the_readme_shows_the_real_plasma_and_balls_examples() {
+fn the_readme_shows_the_real_plasma_balls_and_quickstart_examples() {
     let readme = fs::read_to_string(root().join("README.md")).unwrap();
-    for name in ["plasma", "balls"] {
+    for name in ["plasma", "balls", "quickstart"] {
         assert!(
             readme.contains(&example(name)),
             "README.md must contain examples/{name}.rs exactly"
