@@ -41,7 +41,7 @@ Raw mode cannot be done in safe Rust, so it is the only place `unsafe` appears: 
 | Platform | Built and unit tested | Run against a real terminal |
 |---|---|---|
 | Windows | yes | yes: 8 end-to-end tests in a ConPTY pseudo console (`tests/e2e_windows.rs`) |
-| Linux, macOS | type-checked (`cargo check --target`) | not yet (pty tests planned for CI) |
+| Linux, macOS | type-checked and linted (`cargo check`/`clippy --target`) | written (`tests/e2e_unix.rs`, same scenarios) but **not yet run**; first run is in CI |
 
 ## License
 
