@@ -33,3 +33,9 @@ name = "web_art"
 path = "examples/web_art.rs"
 crate-type = ["cdylib"]
 test = true
+
+# The first game: a light drifting through a plasma sky.
+[[example]]
+name = "glow"
+path = "examples/glow.rs"
+test = true

@@ -368,3 +368,50 @@ fn arrow_key_release_and_ctrl_c_in_key_release_mode_still_work() {
     pty.send(b"\x1b[99;5u");
     assert_eq!(pty.exit_code(), 0);
 }
+
+/// Waits until the program has printed more than `len` bytes, or fails the test.
+fn expect_output_past(pty: &Pty, len: usize) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if pty.raw().len() > len {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the program stopped drawing");
+}
+
+/// The game `glow`: start a round, pause and resume it, then Ctrl+C.
+#[test]
+fn glow_plays_in_a_real_pty_pauses_and_quits_cleanly() {
+    let pty = Pty::spawn(&example("glow"));
+    pty.expect("press Enter");
+    pty.send(b"\r");
+    pty.expect("score");
+    pty.send(b"p");
+    pty.expect("PAUSED");
+    pty.send(b"p");
+    let resumed_from = pty.raw().len();
+    expect_output_past(&pty, resumed_from);
+
+    pty.send(b"\x03");
+    assert_eq!(pty.exit_code(), 0);
+    pty.expect_raw(b"\x1b[?1049l");
+    let raw = pty.raw();
+    let leave = last_index(&raw, b"\x1b[?1049l").expect("leaves the alternate screen");
+    let after = strip_escapes(&raw[leave..]);
+    assert!(
+        after.trim().is_empty(),
+        "nothing is drawn after leaving: {after:?}"
+    );
+}
+
+/// The game `glow`: q quits from the title screen.
+#[test]
+fn glow_quits_with_q_from_the_title() {
+    let pty = Pty::spawn(&example("glow"));
+    pty.expect("press Enter");
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), 0);
+    pty.expect_raw(b"\x1b[?1049l");
+}
