@@ -347,6 +347,47 @@ impl Screen {
         }
     }
 
+    /// Copies every cell of `other` onto this screen with its top left corner
+    /// at `(x, y)`. Cells that fall off this screen are skipped. Call
+    /// `other.finish_frame()` first if it has pixels, so they are copied too.
+    /// This is how a game that needs a fixed-size world, such as a match
+    /// between machines, draws it into a corner or the middle of any window.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut world = Screen::new(10, 4);
+    /// world.clear(Colour::Blue);
+    /// world.finish_frame();
+    ///
+    /// let mut window = Screen::new(30, 10);
+    /// window.clear(Colour::Black);
+    /// window.blit(&world, (window.width() - world.width()) / 2, 3); // centred
+    /// assert_eq!(window.display().pixel(10, 3).unwrap().background(), Colour::Blue);
+    /// assert_eq!(window.display().pixel(9, 3).unwrap().background(), Colour::Black);
+    /// ```
+    pub fn blit(&mut self, other: &Screen, x: i32, y: i32) {
+        let (width, height) = other.size();
+        for row in 0..height as i32 {
+            for column in 0..width as i32 {
+                let Some(from) = other.display().pixel(column as isize, row as isize) else {
+                    continue;
+                };
+                let (ch, colour, background) = (from.character(), from.colour(), from.background());
+                let (to_x, to_y) = (
+                    i64::from(x) + i64::from(column),
+                    i64::from(y) + i64::from(row),
+                );
+                if let Some(to) = self.cell_mut(to_x, to_y) {
+                    to.set_character(ch);
+                    to.set_colour(colour);
+                    to.set_background(background);
+                }
+            }
+        }
+    }
+
     /// The cell at `(x, y)` if it is on the screen. The position is `i64` so
     /// that the bounds check cannot overflow.
     fn cell_mut(&mut self, x: i64, y: i64) -> Option<&mut Pixel> {
@@ -813,6 +854,44 @@ fn to_i32(n: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blit_copies_every_cell_to_an_offset_and_clips_at_the_edges() {
+        let mut small = Screen::new(2, 2);
+        small.clear(Colour::Blue);
+        small.put_on(0, 0, 'a', Colour::Red, Colour::Black);
+        small.put_on(1, 1, 'd', Colour::Green, Colour::White);
+        small.pixel(1, 0, Colour::Yellow);
+        small.finish_frame();
+
+        let mut big = Screen::new(4, 3);
+        big.clear(Colour::Black);
+        big.blit(&small, 1, 1);
+        let cell = |s: &Screen, x, y| {
+            let p = s.display().pixel(x, y).unwrap();
+            (p.character(), p.colour(), p.background())
+        };
+        assert_eq!(cell(&big, 1, 1), cell(&small, 0, 0));
+        assert_eq!(
+            cell(&big, 2, 1),
+            cell(&small, 1, 0),
+            "the pixel layer came too"
+        );
+        assert_eq!(cell(&big, 2, 2), cell(&small, 1, 1));
+        assert_eq!(
+            big.display().pixel(0, 0).unwrap().character(),
+            ' ',
+            "outside is untouched"
+        );
+
+        // partly off the screen: only the part that fits, and no panic
+        let mut corner = Screen::new(2, 2);
+        corner.clear(Colour::Black);
+        corner.blit(&small, -1, -1);
+        assert_eq!(cell(&corner, 0, 0), cell(&small, 1, 1));
+        corner.blit(&small, 5, 5);
+        corner.blit(&small, i32::MIN, i32::MAX);
+    }
 
     #[test]
     fn a_top_half_pixel_draws_an_upper_half_block_on_the_existing_background() {
