@@ -1729,6 +1729,8 @@ mod tests {
                 tick: self.tick,
                 size: self.size,
                 seed: 7,
+                players: 1,
+                me: PlayerId(0),
             };
             let next = play.update(&mut ctx);
             self.keys.end_tick();
