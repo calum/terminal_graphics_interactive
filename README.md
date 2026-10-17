@@ -40,8 +40,8 @@ Raw mode cannot be done in safe Rust, so it is the only place `unsafe` appears: 
 
 | Platform | Built and unit tested | Run against a real terminal |
 |---|---|---|
-| Windows | yes | not yet (needs a person at a console) |
-| Linux, macOS | type-checked (`cargo check --target`) | not yet |
+| Windows | yes | yes: 8 end-to-end tests in a ConPTY pseudo console (`tests/e2e_windows.rs`) |
+| Linux, macOS | type-checked (`cargo check --target`) | not yet (pty tests planned for CI) |
 
 ## License
 

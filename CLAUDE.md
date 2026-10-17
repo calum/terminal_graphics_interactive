@@ -61,6 +61,16 @@ Performance is tested, not assumed (zero dependencies, so benchmarks are plain
   escape sequences, parsing) in safe functions with unit tests, and keep the
   `unsafe` shims too thin to need tests of their own. Say plainly what was and
   was not verified on a real console, per platform.
+- **End-to-end tests run the real `events` example inside a pseudo terminal**
+  and feed it raw key and mouse escape sequences: `tests/e2e_windows.rs` uses
+  ConPTY (`kernel32`); a Unix equivalent (`posix_openpt`) belongs in
+  `tests/e2e_unix.rs` and runs in the CI matrix (ubuntu, macos, windows). The pty
+  harnesses are test-only, so their `unsafe` is allowed but must stay in those
+  files. A new platform behaviour is not "supported" until an e2e test covers it.
+  They cannot prove a physical mouse click becomes an escape sequence; that is
+  the terminal emulator's job, so say so rather than overclaim.
+- Before trusting an e2e test, mutate the library (for example drop a console
+  flag) and check the test fails. Revert the mutation after.
 - `tests/unsafe_audit.rs` fails the build if the word `unsafe` appears in
   `src/` outside `src/raw_mode/`. `lib.rs` uses `#![deny(unsafe_code)]` and only
   the platform shims under `src/raw_mode/` carry `#[allow(unsafe_code)]`.

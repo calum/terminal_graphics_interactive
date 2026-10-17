@@ -14,3 +14,4 @@
 - `cargo run --example events` prints events live.
 - `cargo bench` parser benchmarks.
 - Re-exports `terminal_graphics`.
+- End-to-end tests on Windows (`tests/e2e_windows.rs`): the `events` example runs in a ConPTY pseudo console and is fed raw key and mouse sequences.
