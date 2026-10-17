@@ -135,14 +135,12 @@ impl Parser {
     /// The keyboard flags from the terminal's reply to a kitty keyboard
     /// protocol query (`ESC [ ? u`), or `None` if none has arrived since this
     /// was last called. The reply is never returned as an event.
-    #[allow(dead_code)] // used once the terminal is asked for its flags
     pub(crate) fn take_keyboard_flags(&mut self) -> Option<u32> {
         self.keyboard_flags.take()
     }
 
     /// Whether a device attributes reply (`ESC [ ? ... c`) has arrived since
     /// this was last called. The reply is never returned as an event.
-    #[allow(dead_code)] // used once the terminal is asked for its attributes
     pub(crate) fn take_attributes_reply(&mut self) -> bool {
         std::mem::take(&mut self.attributes_reply)
     }
