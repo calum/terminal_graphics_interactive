@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `game::Screen` (a drawing surface with text, fills, bars and sprites, all clipped to the screen so nothing panics off screen) and `game::Sprite` (pictures from string literals, with transparent spaces, two-colour `paint` and `flipped` mirroring).
 - `game::Keys` (held, pressed and released keys, with timing-based fallback: a press is held for 300 ms, each OS repeat extends it by 100 ms, and real releases from the kitty protocol end it at once) and `game::Controls` (named actions bound to keys, so players can rebind them). Pure logic with an injected clock, so it is tested with no terminal.
 - `Event::KeyUp(Key)` and parsing of the kitty keyboard protocol: key release events from terminals that support it (kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2, recent Windows Terminal), with key repeats still arriving as `Event::Key`. `Terminal::enable_key_release` turns it on.
 - `Terminal::enable_key_release` (kitty keyboard protocol key-release events where the terminal supports it; it asks first and returns `false` otherwise) and `Terminal::has_key_release`.
