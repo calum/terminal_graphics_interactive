@@ -230,19 +230,22 @@ keyboard protocol is an escape sequence, not a syscall.
 
 In build order, each a short file in `examples/`:
 
-1. `pong` - two paddles, two players on one keyboard, smallest `Sim` + `Game`.
-2. `sail` - **the flagship**: title menu, boat riding `wave()`, fireballs with
-   particle trails, score, pause (`push`), game over. Uses a sea backdrop,
-   `Pool`, `Particles`, `Palette`.
-3. `snake` - the classic, in about 60 lines, for the "first game in minutes" test.
-4. `sail_together` - `sail` over `Tcp` lockstep, for the multiplayer milestone.
+1. `glow` - the smallest game, in about 50 lines: steer a light through a
+   drifting plasma sky and collect motes that leave glowing trails. Proves the
+   core API and the art backdrop in minutes.
+2. `sail` - **the flagship**: title menu, boat riding `wave()` on an ocean
+   backdrop whose sky shifts from dawn to night, fireballs with particle
+   trails, spray, score, pause (`push`), game over. Uses `Pool`, `Particles`,
+   `Palette`.
+3. `sail_together` - `sail` over `Tcp` lockstep, for the multiplayer milestone.
 
 ## The website: two pages, one URL
 
 The site is currently one page. Make it a small site:
 
 ```
-https://calum.github.io/terminal_graphics_interactive/          Terminal Art   (unchanged: links and #share hashes keep working)
+https://calum.github.io/terminal_graphics_interactive/          landing page: two doors (forwards old #share links to /art/)
+https://calum.github.io/terminal_graphics_interactive/art/      Terminal Art   (the current page, moved)
 https://calum.github.io/terminal_graphics_interactive/games/    Terminal Games (new)
 ```
 
@@ -258,7 +261,7 @@ https://calum.github.io/terminal_graphics_interactive/games/    Terminal Games (
   not interpreted ones. `examples/web_games.rs` is a second wasm module (so the
   art page does not download game code) that runs the same `Game` code the
   terminal runs, through a `Screen` -> canvas path like `web_art`'s.
-- The games page has: a gallery (pong, sail, snake), a canvas with keyboard focus
+- The games page has: a gallery (glow, sail), a canvas with keyboard focus
   and **on-screen touch buttons** on phones, the game's source shown beside it
   (the real example file, tested to match, as for art), and a **tuner**: sliders for the
   numbers a game chooses to expose (fireball rate, wave height, boat speed) that
@@ -275,18 +278,18 @@ https://calum.github.io/terminal_graphics_interactive/games/    Terminal Games (
 
 ## Phases (each shippable, each its own PR)
 
-0. **Foundations (no new user-facing API).** Shared loop module with fixed
+1. **Foundations (no new user-facing API).** Shared loop module with fixed
    timestep; art moved onto it; diffing renderer with benchmark and README
    numbers. Art behaviour unchanged.
-1. **Input.** `Input`, held-key emulation, kitty protocol where available, e2e
+2. **Input.** `Input`, held-key emulation, kitty protocol where available, e2e
    on all three OSes. Ship `Controls`.
-2. **Core game API.** `Game`, `Next`, `Context`, `Screen`, `Rng`, `Sprite`,
-   `Pool`, `Timer`. Examples `pong` and `snake`. `llms.txt` games section.
-3. **Art in games.** Regions for `sketch_frame`, `backdrop`, `Particles`.
+3. **Core game API.** `Game`, `Next`, `Context`, `Screen`, `Rng`, `Sprite`,
+   `Pool`, `Timer`. Example `glow`. `llms.txt` games section.
+4. **Art in games.** Regions for `sketch_frame`, `backdrop`, `Particles`.
    Flagship `sail`.
-4. **Website.** Shared page modules, `/games/`, `web_games`, tuner, touch
+5. **Website** (only once `sail` works). Shared page modules, `/games/`, `web_games`, tuner, touch
    controls, `check_site` coverage.
-5. **Multiplayer.** `Sim`, `Encode`/`Decode`, `Local` and `Tcp` transports,
+6. **Multiplayer.** `Sim`, `Encode`/`Decode`, `Local` and `Tcp` transports,
    lockstep, desync hash, `sail_together`, then server mode, then `WebSocket`.
 
 Phases 0 to 3 are about the game library and can ship as 0.2; the site follows;
@@ -301,16 +304,15 @@ multiplayer is 0.3. Version bumps and changelog follow the release rules in
 - Matchmaking, accounts, chat, anti-cheat beyond the authoritative-server model.
 - Pixel-perfect graphics: this is cells, with half-blocks as the upper limit.
 
-## Open questions for you
+## Decisions (settled with the owner)
 
-1. **Name.** Keep "Terminal Games" as a section of this crate (my recommendation),
-   or also rename the crate so the two names appear in `Cargo.toml`?
-2. **Quit keys.** For games `q` and Esc belong to the game (Esc usually opens
-   pause), so only Ctrl+C always quits. OK?
-3. **Site root.** Keep Art at `/` and Games at `/games/` (my recommendation, so
-   existing links survive), or make `/` a landing page with two doors?
-4. **First multiplayer target.** Lockstep over TCP for small games first, or an
-   authoritative server first? Lockstep is far smaller to build and is what this
-   design assumes.
-5. **Phase order.** Is the website (phase 4) wanted early, with only `pong` on it,
-   to get a live games page sooner?
+1. Terminal Games stays a section of this crate; the crate is not renamed.
+2. In games `q` and Esc belong to the game; only Ctrl+C always quits.
+3. The site root `/` becomes a **landing page** with two doors: Terminal Art at
+   `/art/` and Terminal Games at `/games/`. The existing art page moves to
+   `/art/`; its `#share` links break unless `/` forwards a `#hash` to `/art/`
+   (the landing page does that, with a test).
+4. Multiplayer starts with lockstep over TCP (my recommendation).
+5. The website waits until there is a fully working flagship game. Pong is
+   dropped as a flagship: the examples should be unique and arty.
+6. 100% Rust and no dependencies other than `terminal_graphics`, ever.
