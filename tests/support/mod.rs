@@ -100,6 +100,29 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn the_other_art_examples_each_draw_react_to_the_mouse_and_quit() {
+            // rings, tunnel and waves are sketches; bubbles is a world
+            for name in ["rings", "tunnel", "waves", "bubbles"] {
+                let pty = Pty::spawn(&example(name));
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !pty.text().contains(['░', '▒', '▓', '█']) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "{name} drew nothing; it printed {:?}",
+                        pty.text()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                // move, press, drag, release, right-press
+                pty.send(b"\x1b[<35;30;10M\x1b[<0;40;8M\x1b[<32;50;9M\x1b[<0;50;9m\x1b[<2;20;5M");
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                assert!(!pty.has_exited(), "{name} stopped on its own");
+                pty.send(b"q");
+                assert_eq!(pty.exit_code(), 0, "{name}");
+            }
+        }
+
+        #[test]
         fn the_physics_world_draws_balls_takes_mouse_input_and_quits() {
             let pty = Pty::spawn(&example("balls"));
             pty.expect("█");

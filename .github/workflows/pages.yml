@@ -1,0 +1,55 @@
+name: Website
+
+# Builds the website, drives it in a real browser, and publishes it to GitHub
+# Pages when master changes. Pull requests build and check it but never deploy.
+#
+# One-time setup: Settings, Pages, Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+# One deploy at a time; a newer push replaces one that is still waiting.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo build --release --example web_art --target wasm32-unknown-unknown
+      - run: cargo run --example build_site
+      # The runner's Google Chrome loads the built site and drives its real
+      # buttons, editor and mouse handlers. --require fails if there is no browser.
+      - run: cargo run --release --example check_site -- --require
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: target/site
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

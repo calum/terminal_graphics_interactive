@@ -9,7 +9,7 @@ categories = ["command-line-interface", "graphics"]
 rust-version = "1.70"
 repository = "https://github.com/calum/terminal_graphics_interactive"
 license = "MIT OR Apache-2.0"
-exclude = [".github/*", "CLAUDE.md", "docs/*", "assets/*", "examples/make_gifs.rs", "examples/site/*"]
+exclude = [".github/*", "CLAUDE.md", "docs/*", "assets/*", "examples/make_gifs.rs", "examples/site/*", "examples/web_art.rs", "examples/build_site.rs"]
 description = "Keyboard and mouse input for terminal_graphics: build interactive terminal games, art and animations. Almost no unsafe."
 
 [dependencies]
@@ -22,3 +22,10 @@ harness = false
 [[bench]]
 name = "art"
 harness = false
+
+# The program that runs on the website: compiled to WebAssembly by the Pages workflow.
+[[example]]
+name = "web_art"
+path = "examples/web_art.rs"
+crate-type = ["cdylib"]
+test = true
