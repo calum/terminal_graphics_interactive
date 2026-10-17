@@ -86,7 +86,7 @@ pub use controls::Controls;
 pub use headless::Headless;
 pub use hit::Hit;
 pub use keys::Keys;
-pub use net::{PeerId, PlayerId};
+pub use net::{Host, Local, PeerId, PlayerId, Tcp, Transport};
 pub use particles::{Particle, Particles};
 pub use pixel_art::PixelArt;
 pub use pool::Pool;

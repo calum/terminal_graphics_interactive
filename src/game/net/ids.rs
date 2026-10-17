@@ -24,7 +24,7 @@ impl PlayerId {
     }
 }
 
-/// Who is at the other end of a `Transport`. Peer *n* is
+/// Who is at the other end of a [`Transport`](super::Transport). Peer *n* is
 /// the machine playing player *n*.
 ///
 /// ```
