@@ -19,6 +19,12 @@ const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
 const PASTE_ON: &str = "\x1b[?2004h";
 const PASTE_OFF: &str = "\x1b[?2004l";
 
+/// Report the pointer as it moves, even with no button held. Off by default,
+/// because it makes the terminal send an event for every cell the pointer
+/// crosses, which is a lot of traffic over a slow link.
+const MOVEMENT_ON: &str = "\x1b[?1003h";
+const MOVEMENT_OFF: &str = "\x1b[?1003l";
+
 /// Used when the terminal does not answer the size query.
 const DEFAULT_SIZE: (u32, u32) = (80, 24);
 
@@ -32,7 +38,7 @@ fn start_sequence() -> String {
 
 /// What is printed when a session ends: undo everything `start_sequence` did.
 fn stop_sequence() -> String {
-    format!("{MOUSE_OFF}{PASTE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
+    format!("{MOVEMENT_OFF}{MOUSE_OFF}{PASTE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
 }
 
 /// Moves the cursor to the far bottom right corner (terminals stop at the
@@ -156,6 +162,16 @@ impl Terminal {
         self.size
     }
 
+    /// Also report the mouse pointer as it moves with no button held, as
+    /// `MouseKind::Moved` events. Without this only presses, releases, drags
+    /// and scrolling are reported. It is switched off again when the session
+    /// ends. Expect many events: poll often.
+    pub fn report_mouse_movement(&mut self) -> io::Result<()> {
+        let mut out = io::stdout();
+        out.write_all(MOVEMENT_ON.as_bytes())?;
+        out.flush()
+    }
+
     /// Shows `display` at the top left of the terminal, replacing what was
     /// there. The top left cell of the display is the terminal's `(0, 0)`, so
     /// [`Mouse::cell_in`](crate::Mouse::cell_in) maps a mouse event straight to
@@ -236,6 +252,23 @@ mod tests {
             off < leave,
             "paste mode is reset while still on the alternate screen"
         );
+    }
+
+    #[test]
+    fn movement_reporting_has_its_own_on_and_off_sequences() {
+        assert_eq!(MOVEMENT_ON, "\x1b[?1003h");
+        assert_eq!(MOVEMENT_OFF, "\x1b[?1003l");
+    }
+
+    #[test]
+    fn stop_always_turns_movement_reporting_off_before_leaving() {
+        // it may have been turned on at any time, so stop does not track it
+        let stop = stop_sequence();
+        let off = stop
+            .find(MOVEMENT_OFF)
+            .expect("turns movement reporting off");
+        let leave = stop.find(LEAVE_ALT_SCREEN).unwrap();
+        assert!(off < leave);
     }
 
     #[test]

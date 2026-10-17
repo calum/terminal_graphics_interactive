@@ -2,12 +2,14 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+mod art;
 mod event;
 mod input;
 mod parser;
 mod raw_mode;
 mod terminal;
 
+pub use art::{sketch, sketch_with, Cell, Palette};
 pub use event::{Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind};
 pub use parser::Parser;
 pub use raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
