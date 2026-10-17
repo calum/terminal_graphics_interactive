@@ -9,7 +9,7 @@ categories = ["command-line-interface", "graphics"]
 rust-version = "1.70"
 repository = "https://github.com/calum/terminal_graphics_interactive"
 license = "MIT OR Apache-2.0"
-exclude = [".github/*", "CLAUDE.md", "docs/*", "assets/*", "examples/make_gifs.rs", "examples/site/*", "examples/web_art.rs", "examples/build_site.rs"]
+exclude = [".github/*", "CLAUDE.md", "docs/*", "assets/*", "examples/make_gifs.rs", "examples/site/*", "examples/web_art.rs", "examples/web_games.rs", "examples/build_site.rs"]
 description = "Keyboard and mouse input for terminal_graphics: build interactive terminal games, art and animations. Almost no unsafe."
 
 [dependencies]
@@ -23,9 +23,49 @@ harness = false
 name = "art"
 harness = false
 
+[[bench]]
+name = "render"
+harness = false
+
 # The program that runs on the website: compiled to WebAssembly by the Pages workflow.
 [[example]]
 name = "web_art"
 path = "examples/web_art.rs"
+crate-type = ["cdylib"]
+test = true
+
+# The first game: a light drifting through a plasma sky.
+[[example]]
+name = "glow"
+path = "examples/glow.rs"
+test = true
+
+# The smallest game, shown on the AI page (llms.txt) and in the README.
+[[example]]
+name = "quickgame"
+path = "examples/quickgame.rs"
+test = true
+
+# The flagship game: a boat on procedural waves under a day-night sky.
+[[example]]
+name = "sail"
+path = "examples/sail.rs"
+test = true
+
+# The generator and the browser check of the website: their own tests run in `cargo test`.
+[[example]]
+name = "build_site"
+path = "examples/build_site.rs"
+test = true
+
+[[example]]
+name = "check_site"
+path = "examples/check_site.rs"
+test = true
+
+# The games on the website: the real games driven through `Headless`, compiled to WebAssembly.
+[[example]]
+name = "web_games"
+path = "examples/web_games.rs"
 crate-type = ["cdylib"]
 test = true

@@ -3,6 +3,7 @@
 use crate::event::Event;
 use crate::input::{Input, MAX_TIMEOUT};
 use crate::raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
+use crate::renderer::Renderer;
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -31,6 +32,21 @@ const DEFAULT_SIZE: (u32, u32) = (80, 24);
 /// How long to wait for the terminal to answer the size query.
 const SIZE_REPLY_WAIT: Duration = Duration::from_millis(300);
 
+/// Asks whether the terminal supports the kitty keyboard protocol: the
+/// keyboard flags query `ESC [ ? u`, then a device attributes query `ESC [ c`
+/// that every terminal answers, so its reply marks the end of the answers.
+const KEY_RELEASE_QUERY: &str = "\x1b[?u\x1b[c";
+
+/// Pushes progressive enhancement flags 1 | 2 | 8: disambiguate escape codes,
+/// report event types (so releases arrive), and report all keys as escape codes.
+const KEY_RELEASE_ON: &str = "\x1b[>11u";
+
+/// Pops the flags pushed by `KEY_RELEASE_ON`.
+const KEY_RELEASE_OFF: &str = "\x1b[<u";
+
+/// How long to wait for the terminal to answer the key release query.
+const KEY_RELEASE_WAIT: Duration = Duration::from_millis(300);
+
 /// What is printed when a session starts: mouse reporting on, cursor hidden.
 fn start_sequence() -> String {
     format!("{ENTER_ALT_SCREEN}{MOUSE_ON}{PASTE_ON}{HIDE_CURSOR}")
@@ -39,6 +55,32 @@ fn start_sequence() -> String {
 /// What is printed when a session ends: undo everything `start_sequence` did.
 fn stop_sequence() -> String {
     format!("{MOVEMENT_OFF}{MOUSE_OFF}{PASTE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
+}
+
+/// What is printed when a session ends if key releases were turned on. The
+/// terminal keeps a separate keyboard mode stack for the alternate screen, which
+/// was entered after the flags were pushed, so the pop must come while still on
+/// it: before `LEAVE_ALT_SCREEN` in `stop_sequence`.
+fn key_release_off_before_stop(enabled: bool) -> String {
+    if enabled {
+        format!("{KEY_RELEASE_OFF}{}", stop_sequence())
+    } else {
+        stop_sequence()
+    }
+}
+
+/// Asks the terminal about key releases, and turns them on if it answers the
+/// query. Returns whether they are on. `input` must be the one the terminal
+/// reads, so the answer is found among the bytes it sends.
+fn negotiate_key_release(input: &mut Input, out: &mut impl Write) -> io::Result<bool> {
+    out.write_all(KEY_RELEASE_QUERY.as_bytes())?;
+    out.flush()?;
+    if !input.request_key_release_support(KEY_RELEASE_WAIT) {
+        return Ok(false);
+    }
+    out.write_all(KEY_RELEASE_ON.as_bytes())?;
+    out.flush()?;
+    Ok(true)
 }
 
 /// Moves the cursor to the far bottom right corner (terminals stop at the
@@ -53,16 +95,6 @@ fn size_from_reply(reply: Option<(u32, u32)>) -> (u32, u32) {
         Some((width, height)) if width > 0 && height > 0 => (width, height),
         _ => DEFAULT_SIZE,
     }
-}
-
-/// What to print to show `display`: park the cursor one row below where the
-/// display will go, because `Display::render` starts by moving up its height.
-fn frame_for(display: &Display) -> String {
-    let (_, height) = display.size();
-    if height == 0 {
-        return String::new();
-    }
-    format!("[{};1H{}", height + 1, display.render())
 }
 
 /// Reads `reader` on a background thread and sends each chunk it gets down the
@@ -128,6 +160,9 @@ fn spawn_reader(mut reader: impl Read + Send + 'static) -> io::Result<Receiver<V
 pub struct Terminal {
     input: Input,
     size: (u32, u32),
+    renderer: Renderer,
+    /// Whether key releases were turned on by `enable_key_release`.
+    key_release: bool,
     /// Declared last so the terminal is restored after the sequences below are printed.
     _raw: RawMode,
 }
@@ -150,8 +185,68 @@ impl Terminal {
         Ok(Terminal {
             input,
             size,
+            renderer: Renderer::new(),
+            key_release: false,
             _raw: raw,
         })
+    }
+
+    /// Asks the terminal to report key releases as `Event::KeyUp`, so a game
+    /// can tell when a key goes up. Returns whether they will arrive.
+    ///
+    /// `true` means the terminal answered the support query: a key press is
+    /// `Event::Key`, and its release is `Event::KeyUp`. With key releases on,
+    /// every key arrives this way, including Enter, Esc and plain letters.
+    /// `false` means the terminal did not answer (or did not say it supports
+    /// the protocol), so nothing changes. Then a game should fall back to
+    /// timing-based held-key detection; the `Keys` type in the game module
+    /// does that for you. The answer takes up to 300 ms to arrive, so call
+    /// this once, at the start. Key releases are switched off again when the
+    /// session ends.
+    ///
+    /// Terminals known to support it are kitty, WezTerm, Ghostty, foot,
+    /// Alacritty, iTerm2 and recent Windows Terminal. It has not been checked
+    /// on a physical terminal yet, so try it in the one you use.
+    ///
+    /// ```no_run
+    /// use terminal_graphics_interactive::{Event, Terminal};
+    ///
+    /// let mut terminal = Terminal::start()?;
+    /// if terminal.enable_key_release()? {
+    ///     // a release arrives as `Event::KeyUp` after its `Event::Key` press
+    ///     loop {
+    ///         if let Event::KeyUp(key) = terminal.wait()? {
+    ///             if key.is_char('q') {
+    ///                 break;
+    ///             }
+    ///         }
+    ///     }
+    /// }
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn enable_key_release(&mut self) -> io::Result<bool> {
+        if self.key_release {
+            return Ok(true);
+        }
+        let mut out = io::stdout();
+        self.key_release = negotiate_key_release(&mut self.input, &mut out)?;
+        Ok(self.key_release)
+    }
+
+    /// Whether `Event::KeyUp` events will arrive, that is, whether
+    /// [`Terminal::enable_key_release`] found the terminal supports them and
+    /// turned them on.
+    ///
+    /// ```no_run
+    /// use terminal_graphics_interactive::Terminal;
+    ///
+    /// let mut terminal = Terminal::start()?;
+    /// let releases = terminal.enable_key_release()?;
+    /// assert_eq!(terminal.has_key_release(), releases);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn has_key_release(&self) -> bool {
+        self.key_release
     }
 
     /// The size of the terminal window in cells, `(width, height)`, measured
@@ -178,10 +273,15 @@ impl Terminal {
     /// a cell. The display must be at most one row shorter than the terminal
     /// (`height() - 1`) and no wider than it, or it will be drawn off screen.
     ///
+    /// Only the cells that changed since the last call are sent, so a picture
+    /// that stays still costs almost nothing over a slow link. The first call
+    /// draws every cell. Text printed by hand between frames is not redrawn:
+    /// the next frame only sends the cells of `display` that changed.
+    ///
     /// Call it once per frame.
     pub fn draw(&mut self, display: &Display) -> io::Result<()> {
-        let mut out = io::stdout();
-        out.write_all(frame_for(display).as_bytes())?;
+        let mut out = io::stdout().lock();
+        self.renderer.draw_to(display, &mut out)?;
         out.flush()
     }
 
@@ -208,7 +308,7 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         let mut out = io::stdout();
         // nothing useful can be done if the terminal is already gone
-        let _ = out.write_all(stop_sequence().as_bytes());
+        let _ = out.write_all(key_release_off_before_stop(self.key_release).as_bytes());
         let _ = out.flush();
     }
 }
@@ -299,27 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_puts_the_cursor_one_row_below_the_display_then_renders_it() {
-        // render() moves up by the display height, which lands on row 1
-        let mut display = Display::new(10, 3);
-        display.set_pixel(
-            0,
-            0,
-            'x',
-            terminal_graphics::Colour::Red,
-            terminal_graphics::Colour::Blue,
-        );
-        let frame = frame_for(&display);
-        assert!(frame.starts_with("\x1b[4;1H"), "{frame:?}");
-        assert!(frame.ends_with(&display.render()));
-    }
-
-    #[test]
-    fn a_frame_for_an_empty_display_is_empty() {
-        assert_eq!(frame_for(&Display::new(10, 0)), "");
-    }
-
-    #[test]
     fn the_reader_sends_what_it_reads_then_closes_the_channel() {
         let rx = spawn_reader(Cursor::new(b"hello".to_vec())).unwrap();
         let mut all = Vec::new();
@@ -365,5 +444,62 @@ mod tests {
         drop(rx);
         // nothing to assert beyond not hanging the test process: the thread
         // exits on its next failed send
+    }
+
+    #[test]
+    fn the_key_release_sequences_have_the_documented_text() {
+        assert_eq!(KEY_RELEASE_QUERY, "\x1b[?u\x1b[c");
+        assert_eq!(KEY_RELEASE_ON, "\x1b[>11u");
+        assert_eq!(KEY_RELEASE_OFF, "\x1b[<u");
+        assert_eq!(KEY_RELEASE_WAIT, Duration::from_millis(300));
+    }
+
+    #[test]
+    fn with_key_release_on_it_is_turned_off_before_leaving_the_alternate_screen() {
+        // the terminal keeps a separate key mode stack for the alternate
+        // screen, so the pop has to happen while we are still on it
+        let stop = key_release_off_before_stop(true);
+        let off = stop.find(KEY_RELEASE_OFF).expect("turns key release off");
+        let leave = stop
+            .find(LEAVE_ALT_SCREEN)
+            .expect("leaves the alternate screen");
+        assert!(off < leave, "{stop:?}");
+    }
+
+    #[test]
+    fn without_key_release_the_stop_sequence_is_unchanged() {
+        assert_eq!(key_release_off_before_stop(false), stop_sequence());
+    }
+
+    #[test]
+    fn negotiating_turns_key_release_on_when_the_terminal_supports_it() {
+        let (tx, rx) = channel();
+        let mut input = Input::new(rx);
+        tx.send(b"\x1b[?11u\x1b[?62c".to_vec()).unwrap();
+        let mut out = Vec::new();
+        assert!(negotiate_key_release(&mut input, &mut out).unwrap());
+        assert_eq!(
+            out,
+            format!("{KEY_RELEASE_QUERY}{KEY_RELEASE_ON}").into_bytes()
+        );
+    }
+
+    #[test]
+    fn negotiating_leaves_key_release_off_when_only_the_attributes_reply_comes() {
+        let (tx, rx) = channel();
+        let mut input = Input::new(rx);
+        tx.send(b"\x1b[?62c".to_vec()).unwrap();
+        let mut out = Vec::new();
+        assert!(!negotiate_key_release(&mut input, &mut out).unwrap());
+        assert_eq!(out, KEY_RELEASE_QUERY.as_bytes());
+    }
+
+    #[test]
+    fn negotiating_leaves_key_release_off_when_nothing_answers() {
+        let (_tx, rx) = channel();
+        let mut input = Input::new(rx);
+        let mut out = Vec::new();
+        assert!(!negotiate_key_release(&mut input, &mut out).unwrap());
+        assert_eq!(out, KEY_RELEASE_QUERY.as_bytes());
     }
 }

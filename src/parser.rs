@@ -21,8 +21,18 @@ enum Step {
     Event(Event, usize),
     /// This many bytes are not an event; drop them.
     Skip(usize),
+    /// The terminal answered one of our queries; this is not an event.
+    Reply(Reply, usize),
     /// More bytes are needed to decide.
     Incomplete,
+}
+
+/// A terminal's answer to a query the program sent.
+enum Reply {
+    /// The kitty keyboard flags in force (`ESC [ ? flags u`).
+    KeyboardFlags(u32),
+    /// A device attributes reply (`ESC [ ? ... c`).
+    Attributes,
 }
 
 /// An incremental parser for terminal input.
@@ -44,6 +54,10 @@ pub struct Parser {
     report: Option<(u32, u32)>,
     /// The text of a paste whose end has not arrived yet.
     paste: Option<Vec<u8>>,
+    /// The keyboard flags from the terminal's last reply, until taken.
+    keyboard_flags: Option<u32>,
+    /// Whether a device attributes reply has arrived, until taken.
+    attributes_reply: bool,
 }
 
 impl Parser {
@@ -105,10 +119,30 @@ impl Parser {
                     self.start += used;
                     return Some(event);
                 }
+                Step::Reply(reply, used) => {
+                    self.start += used;
+                    match reply {
+                        Reply::KeyboardFlags(flags) => self.keyboard_flags = Some(flags),
+                        Reply::Attributes => self.attributes_reply = true,
+                    }
+                }
                 Step::Skip(used) => self.start += used,
                 Step::Incomplete => return None,
             }
         }
+    }
+
+    /// The keyboard flags from the terminal's reply to a kitty keyboard
+    /// protocol query (`ESC [ ? u`), or `None` if none has arrived since this
+    /// was last called. The reply is never returned as an event.
+    pub(crate) fn take_keyboard_flags(&mut self) -> Option<u32> {
+        self.keyboard_flags.take()
+    }
+
+    /// Whether a device attributes reply (`ESC [ ? ... c`) has arrived since
+    /// this was last called. The reply is never returned as an event.
+    pub(crate) fn take_attributes_reply(&mut self) -> bool {
+        std::mem::take(&mut self.attributes_reply)
     }
 
     /// Tells the parser that a cursor position report (`ESC [ row ; col R`) is
@@ -186,6 +220,7 @@ fn parse_front(buf: &[u8]) -> Step {
                 Step::Event(Event::Key(key), used + 1)
             }
             Step::Event(event, used) => Step::Event(event, used + 1),
+            Step::Reply(reply, used) => Step::Reply(reply, used + 1),
             Step::Skip(used) => Step::Skip(used + 1),
             Step::Incomplete => Step::Incomplete,
         },
@@ -295,13 +330,24 @@ fn parse_csi(rest: &[u8]) -> Step {
         };
     }
 
-    // only the first two parameters matter for keys: the key, then the modifiers
-    let mut numbers = [None; 2];
-    for (slot, part) in numbers.iter_mut().zip(params.split(|&b| b == b';')) {
-        *slot = std::str::from_utf8(part).ok().and_then(|s| s.parse().ok());
+    // a reply to one of our queries, not a key: `ESC [ ? flags u` or `ESC [ ? ... c`
+    if params.first() == Some(&b'?') {
+        return parse_reply(&params[1..], final_byte, used);
     }
-    let first = numbers[0];
-    let modifiers = |index: usize| modifiers_from_param(numbers[index]);
+
+    if final_byte == b'u' {
+        return parse_kitty(params, used);
+    }
+
+    // only the first two parameters matter for keys: the key, then the modifiers
+    // and event type (`modifiers:event`)
+    let mut numbers = [(None, None); 2];
+    for (slot, part) in numbers.iter_mut().zip(params.split(|&b| b == b';')) {
+        *slot = values(part);
+    }
+    let first = numbers[0].0;
+    let modifiers = |index: usize| modifiers_from_param(numbers[index].0);
+    let event = released(numbers[1].1);
 
     let step = match final_byte {
         b'A' => Some((KeyCode::Up, modifiers(1))),
@@ -321,10 +367,87 @@ fn parse_csi(rest: &[u8]) -> Step {
         b'~' => first.and_then(tilde_key).map(|code| (code, modifiers(1))),
         _ => None,
     };
-    match step {
-        Some((code, modifiers)) => key_event(code, modifiers, used),
-        None => Step::Skip(used),
+    match (step, event) {
+        (Some((code, modifiers)), Some(released)) => key_step(code, modifiers, released, used),
+        _ => Step::Skip(used),
     }
+}
+
+/// `ESC [ ? ...` replies. `params` is what follows the `?`.
+fn parse_reply(params: &[u8], final_byte: u8, used: usize) -> Step {
+    match (final_byte, number(params)) {
+        (b'u', Some(flags)) => Step::Reply(Reply::KeyboardFlags(flags), used),
+        (b'c', _) => Step::Reply(Reply::Attributes, used),
+        _ => Step::Skip(used),
+    }
+}
+
+/// `ESC [ code ; modifiers:event u`, the kitty keyboard protocol. `params` is
+/// what comes before the `u`.
+fn parse_kitty(params: &[u8], used: usize) -> Step {
+    let mut fields = params.split(|&b| b == b';');
+    let code = fields.next().and_then(|field| values(field).0);
+    // the modifiers field is absent or `modifiers:event`; a missing number is malformed
+    let (modifiers, event) = match fields.next().map(values) {
+        None => (None, None),
+        Some((None, _)) => return Step::Skip(used),
+        Some(pair) => pair,
+    };
+    // one more field may follow, the text, which is ignored
+    if fields.count() > 1 {
+        return Step::Skip(used);
+    }
+    match (code.and_then(kitty_code), released(event)) {
+        (Some(code), Some(released)) => {
+            key_step(code, modifiers_from_param(modifiers), released, used)
+        }
+        _ => Step::Skip(used),
+    }
+}
+
+/// The key for a kitty code point. Keypad and media keys live in the
+/// private-use range and are not supported, so they give `None`.
+fn kitty_code(code: u32) -> Option<KeyCode> {
+    Some(match code {
+        27 => KeyCode::Esc,
+        13 => KeyCode::Enter,
+        9 => KeyCode::Tab,
+        127 => KeyCode::Backspace,
+        57344..=63743 => return None,
+        _ => KeyCode::Char(char::from_u32(code)?),
+    })
+}
+
+/// Whether a key sequence's event type (`1` press, `2` repeat, `3` release)
+/// means the key was released. An absent event type is a press.
+fn released(event: Option<u32>) -> Option<bool> {
+    match event {
+        None | Some(1) | Some(2) => Some(false),
+        Some(3) => Some(true),
+        _ => None,
+    }
+}
+
+/// A key press, repeat or release, as its event.
+fn key_step(code: KeyCode, modifiers: Modifiers, released: bool, used: usize) -> Step {
+    let key = Key { code, modifiers };
+    let event = if released {
+        Event::KeyUp(key)
+    } else {
+        Event::Key(key)
+    };
+    Step::Event(event, used)
+}
+
+/// The number before and the number after the first `:` in a parameter such
+/// as `1:3`. A part that is not a number is `None`.
+fn values(part: &[u8]) -> (Option<u32>, Option<u32>) {
+    let mut subs = part.split(|&b| b == b':').map(number);
+    (subs.next().flatten(), subs.next().flatten())
+}
+
+fn number(part: &[u8]) -> Option<u32> {
+    std::str::from_utf8(part).ok()?.parse().ok()
 }
 
 /// The key for `ESC [ n ~`.
@@ -415,6 +538,10 @@ mod tests {
             code,
             modifiers: Modifiers { shift, alt, ctrl },
         })
+    }
+
+    fn key_up(code: KeyCode) -> Event {
+        Event::KeyUp(Key::new(code))
     }
 
     fn mouse(kind: MouseKind, x: isize, y: isize) -> Event {
@@ -847,6 +974,267 @@ mod tests {
         );
         assert_eq!(p.next_event(), Some(key(KeyCode::Char('c'))));
         assert_eq!(p.next_event(), None);
+    }
+
+    #[test]
+    fn kitty_plain_key_is_a_press_with_or_without_the_event_type() {
+        assert_eq!(parse(b"\x1b[97u"), vec![key(KeyCode::Char('a'))]);
+        assert_eq!(parse(b"\x1b[97;1:1u"), vec![key(KeyCode::Char('a'))]);
+    }
+
+    #[test]
+    fn kitty_repeat_is_a_key_press_so_existing_code_keeps_working() {
+        assert_eq!(parse(b"\x1b[97;1:2u"), vec![key(KeyCode::Char('a'))]);
+    }
+
+    #[test]
+    fn kitty_release_is_a_key_up() {
+        assert_eq!(parse(b"\x1b[97;1:3u"), vec![key_up(KeyCode::Char('a'))]);
+    }
+
+    #[test]
+    fn kitty_modifiers_are_one_plus_shift_alt_ctrl_bits() {
+        assert_eq!(
+            parse(b"\x1b[97;5u"),
+            vec![key_mod(KeyCode::Char('a'), false, false, true)]
+        );
+        assert_eq!(
+            parse(b"\x1b[97;2u"),
+            vec![key_mod(KeyCode::Char('a'), true, false, false)]
+        );
+        assert_eq!(
+            parse(b"\x1b[97;3u"),
+            vec![key_mod(KeyCode::Char('a'), false, true, false)]
+        );
+    }
+
+    #[test]
+    fn kitty_release_keeps_its_modifiers() {
+        assert_eq!(
+            parse(b"\x1b[97;5:3u"),
+            vec![Event::KeyUp(Key {
+                code: KeyCode::Char('a'),
+                modifiers: Modifiers {
+                    shift: false,
+                    alt: false,
+                    ctrl: true
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn kitty_modifier_bits_above_ctrl_are_ignored() {
+        // 1 + 4 (ctrl) + 64 (super) + 128 (caps lock)
+        assert_eq!(
+            parse(b"\x1b[97;197u"),
+            vec![key_mod(KeyCode::Char('a'), false, false, true)]
+        );
+    }
+
+    #[test]
+    fn kitty_special_codes_are_the_named_keys() {
+        assert_eq!(parse(b"\x1b[27u"), vec![key(KeyCode::Esc)]);
+        assert_eq!(parse(b"\x1b[13u"), vec![key(KeyCode::Enter)]);
+        assert_eq!(parse(b"\x1b[9u"), vec![key(KeyCode::Tab)]);
+        assert_eq!(parse(b"\x1b[127u"), vec![key(KeyCode::Backspace)]);
+        assert_eq!(parse(b"\x1b[13;1:3u"), vec![key_up(KeyCode::Enter)]);
+    }
+
+    #[test]
+    fn kitty_other_code_points_are_characters() {
+        assert_eq!(parse(b"\x1b[233u"), vec![key(KeyCode::Char('é'))]);
+        assert_eq!(parse(b"\x1b[8364u"), vec![key(KeyCode::Char('€'))]);
+    }
+
+    #[test]
+    fn kitty_private_use_codes_are_consumed_and_ignored() {
+        // keypad and media keys live in 57344..=63743
+        assert_eq!(parse(b"\x1b[57399uq"), vec![key(KeyCode::Char('q'))]);
+        assert_eq!(parse(b"\x1b[57344;1:3uq"), vec![key(KeyCode::Char('q'))]);
+        assert_eq!(parse(b"\x1b[63743uq"), vec![key(KeyCode::Char('q'))]);
+    }
+
+    #[test]
+    fn kitty_invalid_code_points_are_consumed_and_ignored() {
+        // a surrogate, and past the last code point
+        assert_eq!(parse(b"\x1b[55296uq"), vec![key(KeyCode::Char('q'))]);
+        assert_eq!(parse(b"\x1b[1114112uq"), vec![key(KeyCode::Char('q'))]);
+    }
+
+    #[test]
+    fn kitty_alternate_keys_and_text_fields_are_ignored() {
+        // shifted key 65 (A) and base key 97 after the first ':', text "A" last
+        assert_eq!(
+            parse(b"\x1b[97:65:97;2u"),
+            vec![key_mod(KeyCode::Char('a'), true, false, false)]
+        );
+        assert_eq!(
+            parse(b"\x1b[97;2;65u"),
+            vec![key_mod(KeyCode::Char('a'), true, false, false)]
+        );
+    }
+
+    #[test]
+    fn kitty_truncated_sequence_waits_for_the_rest() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[97;1:3");
+        assert_eq!(p.next_event(), None);
+        assert!(p.has_pending());
+        p.feed(b"u");
+        assert_eq!(p.next_event(), Some(key_up(KeyCode::Char('a'))));
+    }
+
+    #[test]
+    fn malformed_kitty_sequences_are_consumed_and_ignored() {
+        let malformed: [&[u8]; 6] = [
+            b"\x1b[97;;;;u",
+            b"\x1b[:u",
+            b"\x1b[u",
+            b"\x1b[97;1:9u",
+            b"\x1b[99999999999u",
+            b"\x1b[97;99999999999u",
+        ];
+        for bytes in malformed {
+            let mut input = bytes.to_vec();
+            input.push(b'q');
+            assert_eq!(
+                parse(&input),
+                vec![key(KeyCode::Char('q'))],
+                "input {:?}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn arrows_and_navigation_keys_with_an_event_type() {
+        assert_eq!(parse(b"\x1b[1;1:3A"), vec![key_up(KeyCode::Up)]);
+        assert_eq!(parse(b"\x1b[1;1:1B"), vec![key(KeyCode::Down)]);
+        assert_eq!(
+            parse(b"\x1b[1;5:3C"),
+            vec![Event::KeyUp(Key {
+                code: KeyCode::Right,
+                modifiers: Modifiers {
+                    shift: false,
+                    alt: false,
+                    ctrl: true
+                },
+            })]
+        );
+        assert_eq!(parse(b"\x1b[1;1:3H"), vec![key_up(KeyCode::Home)]);
+        assert_eq!(parse(b"\x1b[1;1:2F"), vec![key(KeyCode::End)]);
+    }
+
+    #[test]
+    fn tilde_and_function_keys_with_an_event_type() {
+        assert_eq!(parse(b"\x1b[3;1:3~"), vec![key_up(KeyCode::Delete)]);
+        assert_eq!(parse(b"\x1b[5;1:1~"), vec![key(KeyCode::PageUp)]);
+        assert_eq!(parse(b"\x1b[15;1:3~"), vec![key_up(KeyCode::F(5))]);
+    }
+
+    #[test]
+    fn legacy_key_with_an_unknown_event_type_is_ignored() {
+        assert_eq!(parse(b"\x1b[1;1:9Aq"), vec![key(KeyCode::Char('q'))]);
+    }
+
+    /// Every event that comes out of the parser after `input` is fed.
+    fn drain(parser: &mut Parser) -> Vec<Event> {
+        std::iter::from_fn(|| parser.next_event()).collect()
+    }
+
+    #[test]
+    fn keyboard_flags_reply_is_recorded_and_is_not_a_key() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[?11u");
+        assert_eq!(drain(&mut p), vec![]);
+        assert_eq!(p.take_keyboard_flags(), Some(11));
+        assert_eq!(p.take_keyboard_flags(), None, "taking clears it");
+    }
+
+    #[test]
+    fn keyboard_flags_reply_with_no_flags_is_zero_and_not_a_key_a() {
+        // `?97u` would read as the key 'a' without the `?`
+        let mut p = Parser::new();
+        p.feed(b"\x1b[?0u\x1b[?97u");
+        assert_eq!(drain(&mut p), vec![]);
+        assert_eq!(p.take_keyboard_flags(), Some(97));
+    }
+
+    #[test]
+    fn keyboard_flags_reply_split_at_every_byte_boundary() {
+        let reply = b"\x1b[?11ub";
+        for split in 1..reply.len() {
+            let mut p = Parser::new();
+            p.feed(&reply[..split]);
+            let mut events = drain(&mut p);
+            p.feed(&reply[split..]);
+            events.extend(drain(&mut p));
+            assert_eq!(events, vec![key(KeyCode::Char('b'))], "split at {split}");
+            assert_eq!(p.take_keyboard_flags(), Some(11), "split at {split}");
+        }
+    }
+
+    #[test]
+    fn a_keyboard_flags_reply_with_a_huge_number_is_consumed_and_ignored() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[?99999999999uq");
+        assert_eq!(drain(&mut p), vec![key(KeyCode::Char('q'))]);
+        assert_eq!(p.take_keyboard_flags(), None);
+    }
+
+    #[test]
+    fn attributes_reply_is_recorded_and_is_not_a_key() {
+        let mut p = Parser::new();
+        p.feed(b"\x1b[?62;22c");
+        assert_eq!(drain(&mut p), vec![]);
+        assert!(p.take_attributes_reply());
+        assert!(!p.take_attributes_reply(), "taking clears it");
+    }
+
+    #[test]
+    fn attributes_reply_split_at_every_byte_boundary() {
+        let reply = b"\x1b[?62;22cb";
+        for split in 1..reply.len() {
+            let mut p = Parser::new();
+            p.feed(&reply[..split]);
+            let mut events = drain(&mut p);
+            p.feed(&reply[split..]);
+            events.extend(drain(&mut p));
+            assert_eq!(events, vec![key(KeyCode::Char('b'))], "split at {split}");
+            assert!(p.take_attributes_reply(), "split at {split}");
+        }
+    }
+
+    #[test]
+    fn random_sequences_from_the_protocol_alphabet_terminate_and_never_panic() {
+        // a tiny xorshift generator, so the test needs no crates
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"\x1b[;:?0123456789uABCDHF~a";
+        for _ in 0..200 {
+            let len = 1 + (next() % 40) as usize;
+            let input: Vec<u8> = (0..len)
+                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                .collect();
+            let mut p = Parser::new();
+            // one byte at a time exercises every point where a sequence can pause
+            let mut events = 0;
+            for &byte in &input {
+                p.feed(&[byte]);
+                while p.next_event().is_some() {
+                    events += 1;
+                }
+            }
+            // every event uses at least one byte, so this bounds the loop
+            assert!(events <= input.len(), "input {input:?}");
+            p.flush();
+        }
     }
 
     #[test]

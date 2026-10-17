@@ -52,6 +52,95 @@ fn the_recipes_for_a_palette_a_setting_and_an_example_are_there() {
     }
 }
 
+/// The text under a `## ` heading, up to the next one.
+fn section(text: &str, heading: &str) -> String {
+    let start = text
+        .find(heading)
+        .unwrap_or_else(|| panic!("CONTRIBUTING.md must have the section {heading:?}"))
+        + heading.len();
+    let rest = &text[start..];
+    let end = rest.find("\n## ").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+#[test]
+fn the_game_recipes_are_there_and_name_real_files() {
+    let text = contributing();
+    for heading in ["## Add a game example", "## Add a game building block"] {
+        assert!(text.contains(heading), "missing the section {heading:?}");
+    }
+    for path in [
+        "examples/glow.rs",
+        "examples/quickgame.rs",
+        "Cargo.toml",
+        "src/game/mod.rs",
+        "tests/e2e_unix.rs",
+        "CHANGELOG.md",
+        "README.md",
+        "llms.txt",
+    ] {
+        assert!(
+            text.contains(path),
+            "CONTRIBUTING.md does not mention {path}"
+        );
+        assert!(
+            root().join(path).exists(),
+            "{path} is named but does not exist"
+        );
+    }
+}
+
+#[test]
+fn the_game_example_recipe_covers_the_test_entry_and_the_follow_up_files() {
+    let text = contributing();
+    let recipe = section(&text, "## Add a game example");
+    for needle in [
+        "game::*",
+        "Headless",
+        "[[example]]",
+        "test = true",
+        "tests/e2e_unix.rs",
+        "CHANGELOG",
+        "README",
+        "llms.txt",
+    ] {
+        assert!(
+            recipe.contains(needle),
+            "the game example recipe lacks {needle:?}"
+        );
+    }
+}
+
+#[test]
+fn the_game_example_recipe_says_to_draw_objects_as_coloured_regions() {
+    let text = contributing();
+    let recipe = section(&text, "## Add a game example");
+    let rule = "Draw objects as coloured regions (`PixelArt`, `disc`, `glow`, `Particles`), \
+                not as text characters; keep text for the HUD and labels.";
+    assert!(
+        recipe.contains(rule),
+        "the game example recipe lacks the colour rule {rule:?}"
+    );
+}
+
+#[test]
+fn the_game_building_block_recipe_says_what_a_block_must_be() {
+    let text = contributing();
+    let recipe = section(&text, "## Add a game building block");
+    for needle in [
+        "src/game/mod.rs",
+        "pure",
+        "doc example",
+        "unit tests",
+        "llms.txt",
+    ] {
+        assert!(
+            recipe.contains(needle),
+            "the building block recipe lacks {needle:?}"
+        );
+    }
+}
+
 #[test]
 fn the_functions_it_points_at_are_real() {
     let text = contributing();

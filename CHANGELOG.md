@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The website has three pages.** `/` is a landing page with two doors, Terminal Art at `/art/` and Terminal Games at `/games/`; old share links (`/#code=...`) are forwarded to `/art/#code=...`. All pages share one top bar (ART, GAMES, GitHub, crates.io) and the same retro look. `examples/build_site.rs` is split: the shared style, nav, rainbow title and colour classes are in `examples/site/shell.rs`, and each page has its own module (`art_page.rs`, `landing.rs`, `games_page.rs`).
+- **The games page plays the real games.** `examples/web_games.rs` is a second WebAssembly module (so the art page does not download game code) that drives `glow`, `sail` and `quickgame` through `Headless`: the page forwards key down and up events and the pointer, and paints the cells on a canvas, drawing half blocks as rectangles. It has touch buttons for phones, shows the game's real source beside it, a short "make your own" section, a tuner with sliders, and says plainly that multiplayer is not on the page yet.
+- `game::Tuning` and `game::Knob`: numbers a game exposes (`Tuning::new().knob(name, label, default, min, max)`, read with `tuning.get(name, fallback)`) so a web page can change them while the game runs, with no interpreter. `glow` exposes `mote_rate` and `round_length`; `sail` exposes `fireball_rate`, `wave_height` and `boat_speed`. Each game has `pub fn tuning()` and `pub fn start(tuning)`; with the default values they play exactly as before.
+- `Headless::mouse` feeds any mouse event (button down and up, drag) to the game, so a held button can be tested.
+- `cargo test` now also runs the tests of `build_site` and `check_site`, which were not run before.
+- `check_site` loads `/`, `/art/` and `/games/`, checks that an old `/#code=...` link is forwarded, starts a game, presses a key and sees the frame change, drags a slider and presses the touch buttons.
+- `sail: the sea sits lower, fireballs fall a little slower and the boat sails a little faster; overlays are drawn in framed panels (new Screen::frame and clear_pixels).`
+- `Screen::pixel`, `disc`, `glow`, `finish_frame` and `PixelArt`: games draw objects as coloured regions (half-block pixels and soft glows) instead of text characters; `Particles` now draw as coloured pixels. `run` and `Headless` finish each frame for you.
+- `cargo run --example sail`: the flagship game: a sailboat that steers left and right, dodging fireballs that fall from the sky and fizzle out in steam when they reach the water. The sea grows rougher the farther you sail, and the sky runs from dawn to night.
+- `game::Waves` (one sea function for both the picture and the physics: `height`, `slope`, `surface_y`, `tilt` and `shade`, with `calm` and `stormy` presets) and `game::Particles` (pooled bursts, sparks and spray: `emit`, `burst`, `gravity`, `drag`, `palette`, `step` and `draw`, with no allocation after construction).
+- `Screen::backdrop` and `Screen::backdrop_in`: draw art formulas as the background of a game, or into a part of the screen.
+- `llms.txt`, README and CONTRIBUTING cover the games section; new example quickgame.
+- `cargo run --example glow`: a game of light and plasma (title, play, pause and game-over scenes; the sky ripples when you collect motes).
+- `glow` now draws its light, motes and trail as glowing coloured regions instead of text characters.
+- `game::Game`, `Next`, `Context`, `Headless` and `run`: the scene-based game loop (fixed 60 updates a second, scenes for menus and pause, a headless runner for tests, Ctrl+C always quits and q/Esc belong to the game).
+- `game::Rng` (deterministic random numbers, the same on every machine), `game::Timer` (cooldowns and spawn clocks in seconds of game time), `game::Pool` (fixed-capacity object lists that never reallocate) and `game::Hit` (rectangle and circle collision tests).
+- `game::Screen` (a drawing surface with text, fills, bars and sprites, all clipped to the screen so nothing panics off screen) and `game::Sprite` (pictures from string literals, with transparent spaces, two-colour `paint` and `flipped` mirroring).
+- `game::Keys` (held, pressed and released keys, with timing-based fallback: a press is held for 300 ms, each OS repeat extends it by 100 ms, and real releases from the kitty protocol end it at once) and `game::Controls` (named actions bound to keys, so players can rebind them). Pure logic with an injected clock, so it is tested with no terminal.
+- `Event::KeyUp(Key)` and parsing of the kitty keyboard protocol: key release events from terminals that support it (kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2, recent Windows Terminal), with key repeats still arriving as `Event::Key`. `Terminal::enable_key_release` turns it on.
+- `Terminal::enable_key_release` (kitty keyboard protocol key-release events where the terminal supports it; it asks first and returns `false` otherwise) and `Terminal::has_key_release`.
+- `cargo run --example events -- --key-release` shows key press and release events on terminals that support them.
+- `Terminal::draw` now sends only the cells that changed; the first call draws everything. New public `Renderer` writes diffed frames to any `Write` (`Renderer::draw_to`, `Renderer::invalidate`). `cargo bench --bench render` compares it with a full redraw; see the README.
 - `Terminal`: an interactive session. `Terminal::start()` enters raw mode,
   turns on mouse reporting and hides the cursor, and reads input on a
   background thread; `poll(timeout)` and `wait()` return events. Everything is

@@ -31,11 +31,46 @@ fn the_site_is_built_from_the_real_example_and_checked_in_a_browser() {
     for step in [
         "wasm32-unknown-unknown",
         "cargo build --release --example web_art --target wasm32-unknown-unknown",
+        "cargo build --release --example web_games --target wasm32-unknown-unknown",
         "cargo run --example build_site",
         "cargo run --release --example check_site -- --require",
     ] {
         assert!(build.contains(step), "the build job must run `{step}`");
     }
+}
+
+#[test]
+fn both_wasm_modules_are_built_before_the_site_is_built_and_checked() {
+    let Some(text) = workflow() else { return };
+    let build = job(&text, "build");
+    let at = |needle: &str| {
+        build
+            .find(needle)
+            .unwrap_or_else(|| panic!("the build job must run `{needle}`"))
+    };
+    let art = at("--example web_art --target");
+    let games = at("--example web_games --target");
+    let site = at("cargo run --example build_site");
+    let check = at("cargo run --release --example check_site -- --require");
+    assert!(
+        art < site && games < site,
+        "build both wasm modules before the site"
+    );
+    assert!(site < check, "check the site after it is built");
+}
+
+#[test]
+fn the_site_is_uploaded_only_after_the_checks_and_has_all_three_pages() {
+    let Some(text) = workflow() else { return };
+    let build = job(&text, "build");
+    assert!(
+        build.find("check_site").unwrap() < build.find("upload-pages-artifact").unwrap(),
+        "upload only a checked site"
+    );
+    assert!(
+        build.contains("path: target/site"),
+        "upload the whole site directory: landing, art and games"
+    );
 }
 
 #[test]

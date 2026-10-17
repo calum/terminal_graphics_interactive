@@ -62,6 +62,42 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
+## Terminal Games
+
+**Make games in your terminal.** A game is a set of screens (a title, a play screen, a pause, a game over). Each one is a `Game` that updates 60 times a second, reads held keys and the mouse, and draws on a `Screen`. The crate also brings random numbers, timers, object pools and collision shapes, and `Headless` runs a game with no terminal, so tests can play it.
+
+Play the examples. `sail` is the flagship: a sailboat on the open sea, under a sky that turns from dawn to night. Steer left and right to dodge the fireballs that fall from the sky; the farther you sail, the rougher the sea and the more fireballs come.
+
+```sh
+cargo run --example sail        # the flagship: a sailboat on the sea; steer to dodge the fireballs
+cargo run --example glow        # a light drifts through a plasma sky; touch the motes
+cargo run --example quickgame   # steer a @ and collect the * stars for 20 seconds
+```
+
+This is the shape of `quickgame`: a title that switches to the play screen on Enter. The rest is in [examples/quickgame.rs](examples/quickgame.rs):
+
+```rust
+use terminal_graphics_interactive::game::*;
+
+fn main() -> std::io::Result<()> {
+    run(Title { score: None })
+}
+
+impl Game for Title {
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Enter) {
+            Next::switch(Play::new(ctx.seed))
+        } else {
+            Next::stay()
+        }
+    }
+}
+```
+
+What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the games also run on the website (`/games/`, the real games as WebAssembly), which a headless browser check loads but no person has looked at yet. Multiplayer is coming; it is not built.
+
+To test a game without a terminal, use `Headless`. It runs the same updates as `run`: you press keys, step time and read back what was drawn, as `tests/game_api.rs` and the tests in `examples/quickgame.rs` do.
+
 ## Add the mouse and keyboard to anything
 
 Under the art API is `Terminal`: a full-screen session that gives you key presses, mouse clicks, drags, scrolling and pastes as events, and a window to draw a `Display` in. `poll` doubles as the frame timer, and `mouse.cell_in(&display)` turns a mouse position into a cell:
@@ -126,13 +162,32 @@ Over SSH it works when a terminal is allocated (`ssh -t host ...`). The tests pr
 - **Fast.** `cargo bench` runs benchmarks that use only `std`. A 200 by 60 plasma costs about 0.8 ms of a 33 ms frame, and parsing input takes tens of nanoseconds per event.
 - **Tested.** Unit tests for the parser, the palette and the simulation, and end-to-end tests that run every example in a real pseudo terminal on all three systems.
 
+## Rendering cost
+
+`Terminal::draw` sends only the cells that changed since the last frame (`Renderer`, also public for any `Write`). The first frame draws everything. `cargo bench --bench render` compares it with redrawing the whole frame each time, on the same frames, with `std` timing:
+
+| Scenario | Size | Full redraw: us per frame | Full redraw: bytes per frame | Changed cells only: us per frame | Changed cells only: bytes per frame |
+|---|---|---:|---:|---:|---:|
+| still (same frame) | 80x24 | 79 to 97 | 17,717 | 2.4 to 3.4 | 0 |
+| still | 200x60 | 526 to 564 | 109,145 | 16 to 19 | 0 |
+| a 3x3 block moving | 80x24 | 5.4 to 6.6 | 2,597 | 3.2 to 5.5 | 88 |
+| a 3x3 block moving | 200x60 | 30 to 33 | 13,673 | 18 to 20 | 89 |
+| plasma (every cell changes) | 80x24 | 80 to 91 | 17,717 | 98 to 163 | 17,259 |
+| plasma (every cell changes) | 200x60 | 503 to 616 | 109,145 | 597 to 629 | 107,943 |
+
+Machine: Intel Xeon at 2.10 GHz, 4 threads, Linux x86_64. Each time is a median of 15 samples. The ranges are the lowest and highest of the runs made: five for the full redraw (two of them from before the renderer existed) and three for the changed cells only. The byte counts are exact and do not vary between runs. The first full frame is left out of the changed-cells bytes.
+
+- **Still and moving pictures** send far fewer bytes, which is what matters over a slow SSH link: none at all for a still picture, and under 100 bytes for a small moving block instead of several kilobytes. They also take less time, at 200 by 60 about 19 us against about 31 us for the moving block, and far less for the still picture.
+- **Plasma, where every cell changes,** saves only 2 to 3 per cent of the bytes. Its time is not better: the changed-cells runs were slower than the full redraw in both runs at both sizes, but at 80 by 24 the spread between runs is as large as the difference, so these runs do not show whether it is a real cost.
+- At 60 frames a second a frame has about 16.7 ms, and both ways fit easily at these sizes. The gain is in the bytes, not the CPU.
+
 ## Contributing
 
 Small, friendly pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has short recipes for adding a palette, a `World` setting or an example, and [CLAUDE.md](CLAUDE.md) explains the principles and process.
 
 ## Links
 
-- Website with a live editor: https://calum.github.io/terminal_graphics_interactive/
+- Website with a live editor and playable games: https://calum.github.io/terminal_graphics_interactive/ (art at `/art/`, games at `/games/`)
 - crates.io: https://crates.io/crates/terminal_graphics_interactive
 - API documentation: https://docs.rs/terminal_graphics_interactive
 - The graphics crate it builds on: https://github.com/calum/terminal_graphics_api
