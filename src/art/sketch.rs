@@ -38,14 +38,28 @@ impl Cell {
     }
 }
 
-/// Colours every cell of `display` from `formula`, which returns a number
-/// from -1.0 to 1.0.
-pub(crate) fn fill(
+/// Draws one frame of a sketch into `display`, with no terminal: every cell is
+/// coloured from `formula`, which returns a number from -1.0 to 1.0.
+///
+/// [`sketch`] calls this for you every frame. Call it yourself to test a
+/// formula, to draw into a `Display` you print some other way, or to measure
+/// how fast a formula is.
+///
+/// ```
+/// use terminal_graphics_interactive::{sketch_frame, Display, Palette, Pointer};
+///
+/// let mut display = Display::new(20, 6);
+/// sketch_frame(&mut display, &Palette::ocean(), 0.0, &Pointer::default(), |cell| {
+///     (cell.x * 0.3).sin()
+/// });
+/// assert_ne!(display.pixel(0, 0), display.pixel(5, 0));
+/// ```
+pub fn sketch_frame(
     display: &mut Display,
     palette: &Palette,
     t: f32,
     pointer: &Pointer,
-    formula: &mut impl FnMut(&Cell) -> f32,
+    mut formula: impl FnMut(&Cell) -> f32,
 ) {
     let (width, height) = display.size();
     let mut cell = Cell {
@@ -75,7 +89,7 @@ pub fn sketch(formula: impl FnMut(&Cell) -> f32) -> io::Result<()> {
 
 /// Like [`sketch`], with a choice of [`Palette`].
 pub fn sketch_with(palette: Palette, mut formula: impl FnMut(&Cell) -> f32) -> io::Result<()> {
-    run_loop(|display, t, pointer| fill(display, &palette, t, pointer, &mut formula))
+    run_loop(|display, t, pointer| sketch_frame(display, &palette, t, pointer, &mut formula))
 }
 
 #[cfg(test)]
@@ -111,12 +125,12 @@ mod tests {
     fn the_formula_runs_once_for_every_cell() {
         let mut display = Display::new(7, 3);
         let mut calls = 0;
-        fill(
+        sketch_frame(
             &mut display,
             &Palette::ocean(),
             0.0,
             &Pointer::default(),
-            &mut |_| {
+            |_| {
                 calls += 1;
                 0.0
             },
@@ -128,12 +142,12 @@ mod tests {
     fn x_is_the_column_and_y_is_the_row_stretched_by_two() {
         let mut display = Display::new(4, 3);
         let mut seen = Vec::new();
-        fill(
+        sketch_frame(
             &mut display,
             &Palette::ocean(),
             0.0,
             &Pointer::default(),
-            &mut |cell| {
+            |cell| {
                 seen.push((cell.x, cell.y));
                 0.0
             },
@@ -148,12 +162,12 @@ mod tests {
     fn the_formula_is_told_the_time_the_mouse_and_the_window_size() {
         let mut display = Display::new(10, 5);
         let mut told = None;
-        fill(
+        sketch_frame(
             &mut display,
             &Palette::ocean(),
             1.5,
             &pointer(6.0, 3.0, true),
-            &mut |cell| {
+            |cell| {
                 told = Some(cell.clone());
                 0.0
             },
@@ -174,17 +188,11 @@ mod tests {
         let palette = Palette::fire();
         let mut display = Display::new(2, 1);
         let mut value = -1.0;
-        fill(
-            &mut display,
-            &palette,
-            0.0,
-            &Pointer::default(),
-            &mut |_| {
-                let this = value;
-                value = 1.0;
-                this
-            },
-        );
+        sketch_frame(&mut display, &palette, 0.0, &Pointer::default(), |_| {
+            let this = value;
+            value = 1.0;
+            this
+        });
         for (x, expected) in [
             (0, palette.shade_signed(-1.0)),
             (1, palette.shade_signed(1.0)),
@@ -202,13 +210,9 @@ mod tests {
         let palette = Palette::ocean();
         let mut display = Display::new(3, 1);
         let mut results = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY].into_iter();
-        fill(
-            &mut display,
-            &palette,
-            0.0,
-            &Pointer::default(),
-            &mut |_| results.next().unwrap(),
-        );
+        sketch_frame(&mut display, &palette, 0.0, &Pointer::default(), |_| {
+            results.next().unwrap()
+        });
         let shades: Vec<_> = (0..3)
             .map(|x| {
                 let p = display.pixel(x, 0).unwrap();
@@ -225,12 +229,12 @@ mod tests {
         let mut calls = 0;
         for (w, h) in [(0, 0), (0, 4), (4, 0)] {
             let mut display = Display::new(w, h);
-            fill(
+            sketch_frame(
                 &mut display,
                 &Palette::mono(),
                 0.0,
                 &Pointer::default(),
-                &mut |_| {
+                |_| {
                     calls += 1;
                     0.0
                 },
@@ -243,13 +247,9 @@ mod tests {
     fn it_paints_with_the_palette_colours_only() {
         let palette = Palette::new(&[Colour::Blue, Colour::Red]);
         let mut display = Display::new(5, 5);
-        fill(
-            &mut display,
-            &palette,
-            2.0,
-            &Pointer::default(),
-            &mut |cell| (cell.x + cell.y).sin(),
-        );
+        sketch_frame(&mut display, &palette, 2.0, &Pointer::default(), |cell| {
+            (cell.x + cell.y).sin()
+        });
         for y in 0..5 {
             for x in 0..5 {
                 let pixel = display.pixel(x, y).unwrap();

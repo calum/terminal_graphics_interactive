@@ -11,6 +11,9 @@
 mod palette;
 mod sketch;
 mod stage;
+mod world;
 
 pub use palette::Palette;
-pub use sketch::{sketch, sketch_with, Cell};
+pub use sketch::{sketch, sketch_frame, sketch_with, Cell};
+pub use stage::Pointer;
+pub use world::{Simulation, World};

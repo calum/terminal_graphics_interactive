@@ -79,6 +79,45 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn the_plasma_sketch_fills_the_window_reacts_to_the_mouse_and_quits() {
+            let pty = Pty::spawn(&example("plasma"));
+            // every cell is a shade block, so any of them proves the formula ran
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !pty.text().contains(['░', '▒', '▓', '█']) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "nothing was drawn; the program printed {:?}",
+                    pty.text()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            // the pointer moving with no button held, then a press and a drag
+            pty.send(b"\x1b[<35;30;10M\x1b[<35;60;5M\x1b[<0;60;5M\x1b[<32;70;8M\x1b[<0;70;8m");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(!pty.has_exited(), "mouse input stopped the sketch");
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), 0);
+        }
+
+        #[test]
+        fn the_physics_world_draws_balls_takes_mouse_input_and_quits() {
+            let pty = Pty::spawn(&example("balls"));
+            pty.expect("█");
+            // click to add balls, pull with the pointer, push with the right button
+            for i in 0..4 {
+                let x = 20 + i * 20;
+                pty.send(format!("\x1b[<0;{x};8M\x1b[<0;{x};8m").as_bytes());
+                pty.send(b"\x1b[<35;100;12M\x1b[<2;100;12M");
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                pty.send(b"\x1b[<2;100;12m");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            assert!(!pty.has_exited(), "the world stopped on its own");
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), 0);
+        }
+
+        #[test]
         fn the_quickstart_from_llms_txt_marks_a_clicked_cell_and_quits() {
             // this is the program an AI agent will copy from llms.txt
             let pty = Pty::spawn(&example("quickstart"));

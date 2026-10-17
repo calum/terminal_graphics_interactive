@@ -99,3 +99,18 @@ a `Particles` effect, saving a frame as text.
   Linux and macOS: they draw, take mouse input, and quit cleanly.
 - A benchmark for the fill and the physics step, with numbers in the README.
 - `llms.txt` shows an art example that is a real, compiled file.
+
+## What changed while building it
+
+- **Headless API.** The simulation and the per cell fill needed to be reachable
+  by tests and benchmarks, so they are public: `sketch_frame`, `World::simulation`,
+  `Simulation` and `Pointer`. This also lets an AI agent test its own art with no
+  terminal. *(my call)*
+- **A bug the tests found, also present in the spike.** Pushing overlapping balls
+  apart after the walls had clamped them could shove a ball back out of the
+  window. Positions are now clamped once more after collisions.
+- **Benchmarks.** A 200 by 60 plasma costs about 0.8 ms and the physics under
+  0.1 ms per frame, about 2% of a 33 ms frame at most, so nothing was optimised.
+- **The spike's names.** The demos are now `examples/plasma.rs` and
+  `examples/balls.rs`; `art_plasma` and `art_physics` only existed on a local
+  throwaway branch.

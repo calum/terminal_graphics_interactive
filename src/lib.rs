@@ -9,7 +9,7 @@ mod parser;
 mod raw_mode;
 mod terminal;
 
-pub use art::{sketch, sketch_with, Cell, Palette};
+pub use art::{sketch, sketch_frame, sketch_with, Cell, Palette, Pointer, Simulation, World};
 pub use event::{Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind};
 pub use parser::Parser;
 pub use raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
@@ -31,7 +31,8 @@ pub use terminal_graphics::*;
 /// ```
 pub mod prelude {
     pub use crate::{
-        Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind, Parser, RawMode, Terminal,
+        sketch, sketch_frame, sketch_with, Cell, Event, Key, KeyCode, Modifiers, Mouse,
+        MouseButton, MouseKind, Palette, Parser, Pointer, RawMode, Simulation, Terminal, World,
     };
     pub use terminal_graphics::prelude::*;
 }
