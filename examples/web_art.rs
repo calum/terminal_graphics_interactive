@@ -26,6 +26,7 @@
 #[allow(dead_code)]
 #[path = "site/presets.rs"]
 mod presets;
+#[allow(dead_code)]
 #[path = "site/script/mod.rs"]
 mod script;
 
@@ -196,9 +197,7 @@ impl Machine {
                     return;
                 }
                 // after a pause do not try to catch up on every missed step
-                self.waiting_ms = (self.waiting_ms - steps as f32 * STEP_MS)
-                    .max(0.0)
-                    .min(STEP_MS);
+                self.waiting_ms = (self.waiting_ms - steps as f32 * STEP_MS).clamp(0.0, STEP_MS);
                 let Some(simulation) = self.simulation.as_mut() else {
                     return;
                 };
@@ -342,8 +341,6 @@ pub extern "C" fn palette(index: u32) -> u32 {
     let (r, g, b) = colour.rgb();
     (r as u32) << 16 | (g as u32) << 8 | b as u32
 }
-
-fn main() {}
 
 #[cfg(test)]
 mod tests {

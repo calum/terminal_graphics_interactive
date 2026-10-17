@@ -46,6 +46,7 @@ pub(super) fn windows_output_mode(original: u32) -> u32 {
 }
 
 /// The error returned when stdin is not a terminal.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 pub(super) fn not_a_terminal() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
