@@ -199,3 +199,16 @@ fn the_readme_does_not_repeat_numbers_that_go_stale() {
         "a long status paragraph rots; keep it short"
     );
 }
+
+#[test]
+fn the_games_section_names_sail_as_the_flagship_and_how_to_run_it() {
+    let section = games_section();
+    assert!(
+        section.contains("cargo run --example sail"),
+        "the games section lacks the sail command"
+    );
+    assert!(
+        section.contains("flagship"),
+        "the games section should call sail the flagship"
+    );
+}

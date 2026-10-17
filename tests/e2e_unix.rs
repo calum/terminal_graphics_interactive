@@ -415,3 +415,43 @@ fn glow_quits_with_q_from_the_title() {
     assert_eq!(pty.exit_code(), 0);
     pty.expect_raw(b"\x1b[?1049l");
 }
+
+/// The flagship game `sail`: the title, a round, pause and resume, then Ctrl+C.
+#[test]
+fn sail_plays_in_a_real_pty_pauses_and_quits_cleanly() {
+    let pty = Pty::spawn(&example("sail"));
+    pty.expect("press Enter to sail");
+    pty.send(b"\r");
+    pty.expect("score");
+    pty.send(b"p");
+    pty.expect("PAUSED");
+    // On a terminal without key release events, a key counts as held for 300 ms
+    // after it is pressed, so a second press inside that time is a key repeat.
+    // A person pressing p again comes later than that, so the test does too.
+    thread::sleep(Duration::from_millis(400));
+    pty.send(b"p");
+    // the sky and sea freeze while paused, so output resumes only once play does
+    let resumed_from = pty.raw().len();
+    expect_output_past(&pty, resumed_from);
+
+    pty.send(b"\x03");
+    assert_eq!(pty.exit_code(), 0);
+    pty.expect_raw(b"\x1b[?1049l");
+    let raw = pty.raw();
+    let leave = last_index(&raw, b"\x1b[?1049l").expect("leaves the alternate screen");
+    let after = strip_escapes(&raw[leave..]);
+    assert!(
+        after.trim().is_empty(),
+        "nothing is drawn after leaving: {after:?}"
+    );
+}
+
+/// The flagship game `sail`: q quits from the title screen.
+#[test]
+fn sail_quits_with_q_from_the_title() {
+    let pty = Pty::spawn(&example("sail"));
+    pty.expect("press Enter to sail");
+    pty.send(b"q");
+    assert_eq!(pty.exit_code(), 0);
+    pty.expect_raw(b"\x1b[?1049l");
+}

@@ -128,6 +128,8 @@ A game keeps state, has several screens (title, play, pause, game over), reads h
 
 Use games when your program keeps state, has several screens, scores points or reads player input over time. Use art when it is a formula or a physics toy with no state to manage (`sketch`, `World`). Do not use games for a plain full-screen text UI or a widget toolkit; use `Terminal` directly or a TUI framework.
 
+Read `examples/sail.rs` (the flagship: art in games, with a sky and sea from one formula and pooled fireballs with particles) and `examples/glow.rs` (art in a game, in about 50 lines) to see the pieces used together.
+
 The pieces, all in `game::*`:
 
 - `Game` is a trait with `update(&mut self, ctx) -> Next` and `draw(&self, screen)`: one screen of your game. `Next` says what happens next: `Next::stay()`, `Next::switch(game)`, `Next::push(game)` (pause on top), `Next::pop()` or `Next::quit()`.

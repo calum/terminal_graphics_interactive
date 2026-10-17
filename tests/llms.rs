@@ -420,3 +420,14 @@ fn lists_the_game_rules_that_are_easy_to_get_wrong() {
         );
     }
 }
+
+#[test]
+fn points_at_sail_and_glow_as_the_examples_of_art_in_games() {
+    let section = games_section();
+    assert!(
+        section
+            .lines()
+            .any(|line| line.contains("sail") && line.contains("glow") && line.contains("art")),
+        "the games section needs one line pointing at sail and glow as art in games"
+    );
+}

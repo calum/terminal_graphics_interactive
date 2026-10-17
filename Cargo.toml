@@ -45,3 +45,9 @@ test = true
 name = "quickgame"
 path = "examples/quickgame.rs"
 test = true
+
+# The flagship game: a boat on procedural waves under a day-night sky.
+[[example]]
+name = "sail"
+path = "examples/sail.rs"
+test = true
