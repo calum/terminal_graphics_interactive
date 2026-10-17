@@ -567,10 +567,15 @@ impl Done {
 const HOLD_LIMIT: Duration = Duration::from_secs(120);
 
 fn serve_one(site: &Path, mut stream: TcpStream, done: &Done, mode: Mode) {
+    // a request can arrive in several segments: read up to the blank line
     let mut buffer = [0u8; 4096];
-    let Ok(length) = stream.read(&mut buffer) else {
-        return;
-    };
+    let mut length = 0;
+    while length < buffer.len() && !buffer[..length].windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buffer[length..]) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => length += read,
+        }
+    }
     let request = String::from_utf8_lossy(&buffer[..length]);
     let path = request.split_whitespace().nth(1).unwrap_or("/");
     let (status, kind, body) = match path {
@@ -1198,10 +1203,30 @@ mod tests {
         panic!("could not connect to the test server on port {port} after 5 tries: {last_error}");
     }
 
+    #[test]
+    fn a_request_that_arrives_in_pieces_is_still_understood() {
+        // TCP may deliver a request in several segments; the server must read
+        // up to the blank line instead of trusting its first read
+        let dir = site_dir("pieces");
+        let port = start_server(&dir, Mode::Normal);
+        let mut stream = connect_with_retries(port);
+        stream.write_all(b"GET /art/art.wasm HT").unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        stream.write_all(b"TP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.contains("application/wasm"), "{answer}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// One plain HTTP GET against the test server, answered as text.
     fn get(port: u16, path: &str) -> String {
         let mut stream = connect_with_retries(port);
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        // one write, so the request is one segment
+        let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+        stream.write_all(request.as_bytes()).unwrap();
         let mut answer = String::new();
         stream.read_to_string(&mut answer).unwrap();
         answer

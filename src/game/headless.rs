@@ -92,7 +92,7 @@ impl Headless {
         self
     }
 
-    /// Uses `seed` as the run's random seed (see [`Context::seed`]). The same
+    /// Uses `seed` as the run's random seed (see [`Context::seed`](super::Context::seed)). The same
     /// seed and the same inputs always give the same game.
     ///
     /// ```

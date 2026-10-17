@@ -180,7 +180,7 @@ impl Waves {
 
     /// How far the point at row `y` is from the water, for an art formula: a
     /// number from -1 to 1, negative in the sky above the water, positive in
-    /// the deep below it, and 0 on the surface. A [`Palette`] takes it
+    /// the deep below it, and 0 on the surface. A [`Palette`](crate::Palette) takes it
     /// directly through `Palette::shade_signed`. A non-finite row or level
     /// gives 0.
     ///

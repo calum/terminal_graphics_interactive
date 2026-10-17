@@ -472,7 +472,7 @@ impl Screen {
     ///
     /// Pixels are composited when the frame finishes, so they show above
     /// everything drawn with `put`, `text`, `fill`, `sprite` or `backdrop` in
-    /// the same frame. `run` and [`Headless`] call `finish_frame` for you.
+    /// the same frame. `run` and [`Headless`](super::Headless) call `finish_frame` for you.
     ///
     /// ```
     /// use terminal_graphics::Colour;
@@ -739,7 +739,7 @@ impl Screen {
     }
 
     /// Composites the pixel layer onto the screen. Call it once a frame, after
-    /// everything is drawn; `run` and [`Headless`] do this for you.
+    /// everything is drawn; `run` and [`Headless`](super::Headless) do this for you.
     ///
     /// ```
     /// use terminal_graphics::Colour;
