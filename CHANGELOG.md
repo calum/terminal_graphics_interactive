@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `game::Waves` (one sea function for both the picture and the physics: `height`, `slope`, `surface_y`, `tilt` and `shade`, with `calm` and `stormy` presets) and `game::Particles` (pooled bursts, sparks and spray: `emit`, `burst`, `gravity`, `drag`, `palette`, `step` and `draw`, with no allocation after construction).
+- `Screen::backdrop` and `Screen::backdrop_in`: draw art formulas as the background of a game, or into a part of the screen.
 - `llms.txt`, README and CONTRIBUTING cover the games section; new example quickgame.
 - `cargo run --example glow`: a game of light and plasma (title, play, pause and game-over scenes; the sky ripples when you collect motes).
 - `game::Game`, `Next`, `Context`, `Headless` and `run`: the scene-based game loop (fixed 60 updates a second, scenes for menus and pause, a headless runner for tests, Ctrl+C always quits and q/Esc belong to the game).

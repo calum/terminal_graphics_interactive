@@ -14,6 +14,7 @@ mod stage;
 mod world;
 
 pub use palette::Palette;
+pub(crate) use sketch::sketch_region;
 pub use sketch::{sketch, sketch_frame, sketch_with, Cell};
 pub use stage::Pointer;
 pub use world::{Simulation, World};

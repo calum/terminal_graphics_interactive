@@ -1,6 +1,8 @@
 //! The [`Screen`]: what a game draws on each frame.
 
 use super::Sprite;
+use crate::art::sketch_region;
+use crate::{Cell, Palette, Pointer};
 use terminal_graphics::{Colour, Display, Pixel};
 
 /// The surface a game draws on: a [`Display`] plus helpers for text, fills,
@@ -62,6 +64,82 @@ impl Screen {
                 self.display.set_pixel(x, y, ' ', Colour::Black, background);
             }
         }
+    }
+
+    /// Fills the whole screen with a sketch formula, as the background of the
+    /// frame. `formula` runs once per cell and returns -1.0 to 1.0, the same as
+    /// [`sketch_frame`](crate::sketch_frame). The formula is given the screen
+    /// [`time`](Screen::time), and there is no mouse. Call it first in `draw`,
+    /// then draw sprites and text on top.
+    ///
+    /// A two-layer scene: a sky over the top half, a sea over the bottom half
+    /// and a boat drawn on top of both.
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// fn wave(x: f32, t: f32) -> f32 {
+    ///     (x * 0.08 + t).sin() * 0.5 + (x * 0.19 - t * 1.3).sin() * 0.25
+    /// }
+    /// fn sea(cell: &Cell) -> f32 {
+    ///     ((cell.height / 2.0 + wave(cell.x, cell.t) * 6.0 - cell.y) * 0.25).clamp(-1.0, 1.0)
+    /// }
+    ///
+    /// let mut screen = Screen::new(40, 12);
+    /// screen.backdrop_in(0, 0, 40, 6, &Palette::fire(), |cell| 1.0 - cell.y / cell.height);
+    /// screen.backdrop_in(0, 6, 40, 6, &Palette::ocean(), sea);
+    /// screen.put(18, 5, '^', Colour::White);
+    /// assert_eq!(screen.display().pixel(18, 5).unwrap().character(), '^');
+    /// assert_ne!(screen.display().pixel(0, 6).unwrap().character(), ' ');
+    /// ```
+    pub fn backdrop(&mut self, palette: &Palette, formula: impl FnMut(&Cell) -> f32) {
+        let (width, height) = self.size();
+        sketch_region(
+            &mut self.display,
+            (0, 0, width, height),
+            palette,
+            self.time,
+            &Pointer::default(),
+            formula,
+        );
+    }
+
+    /// Fills the rectangle at `(x, y)` that is `w` by `h` with a sketch
+    /// formula, such as a sky over the top half of the screen. The part off the
+    /// screen is not drawn, and a negative size is an empty rectangle. Inside the
+    /// formula, `cell.x` and `cell.y` count from the rectangle's top left and
+    /// `cell.width` and `cell.height` are its size.
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(10, 4);
+    /// screen.backdrop_in(0, 0, 10, 2, &Palette::fire(), |_| 1.0);
+    /// screen.backdrop_in(0, 2, 10, 2, &Palette::ocean(), |_| -1.0);
+    /// assert_eq!(screen.display().pixel(0, 0).unwrap().character(), '\u{2588}');
+    /// assert_eq!(screen.display().pixel(0, 3).unwrap().character(), ' ');
+    /// ```
+    // the signature is the one the game API is documented with; a struct would add a concept
+    #[allow(clippy::too_many_arguments)]
+    pub fn backdrop_in(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        palette: &Palette,
+        formula: impl FnMut(&Cell) -> f32,
+    ) {
+        // a negative size is an empty rectangle, so it becomes a size of zero
+        let size = |n: i32| u32::try_from(n).unwrap_or(0);
+        sketch_region(
+            &mut self.display,
+            (x, y, size(w), size(h)),
+            palette,
+            self.time,
+            &Pointer::default(),
+            formula,
+        );
     }
 
     /// Draws `ch` in `colour` at column `x`, row `y`, keeping the background
@@ -713,5 +791,106 @@ mod tests {
         let screen = Screen::new(7, 3);
         assert_eq!(screen.size(), (7, 3));
         assert_eq!((screen.width(), screen.height()), (7, 3));
+    }
+
+    #[test]
+    fn a_backdrop_is_given_the_screen_clock() {
+        let mut screen = Screen::new(2, 1);
+        screen.set_clock(2.0, 120);
+        let mut seen = f32::NAN;
+        screen.backdrop(&Palette::ocean(), |cell| {
+            seen = cell.t;
+            0.0
+        });
+        assert_eq!(seen, 2.0);
+    }
+
+    #[test]
+    fn a_backdrop_draws_the_formula_in_every_cell() {
+        let mut screen = Screen::new(3, 2);
+        screen.backdrop(&Palette::mono(), |_| 1.0);
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(screen.display().pixel(x, y).unwrap().character(), '█');
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_in_only_changes_its_own_rectangle() {
+        let mut screen = Screen::new(6, 4);
+        screen.fill(0, 0, 6, 4, 'q', Colour::Red, Colour::Red);
+        screen.backdrop_in(1, 1, 3, 2, &Palette::mono(), |_| 1.0);
+        for y in 0..4 {
+            for x in 0..6 {
+                let inside = (1..4).contains(&x) && (1..3).contains(&y);
+                let drawn = screen.display().pixel(x, y).unwrap().character() == '█';
+                assert_eq!(drawn, inside, "cell ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_backdrop_rectangle_partly_off_the_screen_is_clipped_to_it() {
+        let mut screen = Screen::new(3, 3);
+        screen.fill(0, 0, 3, 3, 'q', Colour::Red, Colour::Red);
+        screen.backdrop_in(-1, -1, 3, 3, &Palette::mono(), |_| 1.0);
+        for y in 0..3 {
+            for x in 0..3 {
+                let inside = x < 2 && y < 2;
+                let drawn = screen.display().pixel(x, y).unwrap().character() == '█';
+                assert_eq!(drawn, inside, "cell ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn inside_a_backdrop_rectangle_the_formula_counts_from_its_corner() {
+        let mut screen = Screen::new(10, 10);
+        let mut first = None;
+        let mut last = None;
+        screen.backdrop_in(4, 5, 3, 2, &Palette::mono(), |cell| {
+            first.get_or_insert((cell.x, cell.y, cell.width, cell.height));
+            last = Some((cell.x, cell.y));
+            0.0
+        });
+        assert_eq!(first, Some((0.0, 0.0, 3.0, 4.0)));
+        assert_eq!(last, Some((2.0, 2.0)));
+    }
+
+    #[test]
+    fn an_empty_negative_or_off_screen_backdrop_rectangle_draws_nothing() {
+        let rectangles = [
+            (1, 1, -2, 2),
+            (1, 1, 2, -2),
+            (1, 1, 0, 2),
+            (1, 1, 2, 0),
+            (10, 10, 3, 3),
+            (-10, -10, 3, 3),
+            (i32::MAX, i32::MAX, i32::MAX, i32::MAX),
+            (i32::MIN, i32::MIN, -1, -1),
+            (i32::MIN, i32::MIN, i32::MAX, i32::MAX),
+        ];
+        for (x, y, w, h) in rectangles {
+            let mut screen = Screen::new(3, 3);
+            screen.fill(0, 0, 3, 3, 'q', Colour::Red, Colour::Red);
+            screen.backdrop_in(x, y, w, h, &Palette::mono(), |_| 1.0);
+            let drawn = screen.display().render().matches('█').count();
+            assert_eq!(drawn, 0, "rectangle ({x}, {y}, {w}, {h})");
+        }
+    }
+
+    #[test]
+    fn a_character_drawn_over_a_backdrop_keeps_the_backdrop_colour() {
+        let palette = Palette::ocean();
+        let mut backdrop_only = Screen::new(4, 2);
+        backdrop_only.backdrop(&palette, |cell| cell.x / 4.0 * 2.0 - 1.0);
+        let mut screen = Screen::new(4, 2);
+        screen.backdrop(&palette, |cell| cell.x / 4.0 * 2.0 - 1.0);
+        screen.put(1, 1, '@', Colour::Yellow);
+        let before = backdrop_only.display().pixel(1, 1).unwrap();
+        let after = screen.display().pixel(1, 1).unwrap();
+        assert_eq!(after.character(), '@');
+        assert_eq!(after.background(), before.background());
     }
 }
