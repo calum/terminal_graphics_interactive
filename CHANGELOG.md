@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Terminal::draw` now sends only the cells that changed; the first call draws everything. New public `Renderer` writes diffed frames to any `Write` (`Renderer::draw_to`, `Renderer::invalidate`). `cargo bench --bench render` compares it with a full redraw; see the README.
 - `Terminal`: an interactive session. `Terminal::start()` enters raw mode,
   turns on mouse reporting and hides the cursor, and reads input on a
   background thread; `poll(timeout)` and `wait()` return events. Everything is

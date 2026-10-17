@@ -8,12 +8,14 @@ mod event;
 mod input;
 mod parser;
 mod raw_mode;
+mod renderer;
 mod terminal;
 
 pub use art::{sketch, sketch_frame, sketch_with, Cell, Palette, Pointer, Simulation, World};
 pub use event::{Event, Key, KeyCode, Modifiers, Mouse, MouseButton, MouseKind};
 pub use parser::Parser;
 pub use raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
+pub use renderer::Renderer;
 pub use terminal::Terminal;
 pub use terminal_graphics::*;
 

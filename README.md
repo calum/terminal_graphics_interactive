@@ -126,6 +126,25 @@ Over SSH it works when a terminal is allocated (`ssh -t host ...`). The tests pr
 - **Fast.** `cargo bench` runs benchmarks that use only `std`. A 200 by 60 plasma costs about 0.8 ms of a 33 ms frame, and parsing input takes tens of nanoseconds per event.
 - **Tested.** Unit tests for the parser, the palette and the simulation, and end-to-end tests that run every example in a real pseudo terminal on all three systems.
 
+## Rendering cost
+
+`Terminal::draw` sends only the cells that changed since the last frame (`Renderer`, also public for any `Write`). The first frame draws everything. `cargo bench --bench render` compares it with redrawing the whole frame each time, on the same frames, with `std` timing:
+
+| Scenario | Size | Full redraw: us per frame | Full redraw: bytes per frame | Changed cells only: us per frame | Changed cells only: bytes per frame |
+|---|---|---:|---:|---:|---:|
+| still (same frame) | 80x24 | 79 to 97 | 17,717 | 2.4 to 3.4 | 0 |
+| still | 200x60 | 526 to 564 | 109,145 | 16 to 19 | 0 |
+| a 3x3 block moving | 80x24 | 5.4 to 6.6 | 2,597 | 3.2 to 5.5 | 88 |
+| a 3x3 block moving | 200x60 | 30 to 33 | 13,673 | 18 to 20 | 89 |
+| plasma (every cell changes) | 80x24 | 80 to 91 | 17,717 | 98 to 163 | 17,259 |
+| plasma (every cell changes) | 200x60 | 503 to 616 | 109,145 | 597 to 629 | 107,943 |
+
+Machine: Intel Xeon at 2.10 GHz, 4 threads, Linux x86_64. Each time is a median of 15 samples. The ranges are the lowest and highest of the runs made: five for the full redraw (two of them from before the renderer existed) and three for the changed cells only. The byte counts are exact and do not vary between runs. The first full frame is left out of the changed-cells bytes.
+
+- **Still and moving pictures** send far fewer bytes, which is what matters over a slow SSH link: none at all for a still picture, and under 100 bytes for a small moving block instead of several kilobytes. They also take less time, at 200 by 60 about 19 us against about 31 us for the moving block, and far less for the still picture.
+- **Plasma, where every cell changes,** saves only 2 to 3 per cent of the bytes. Its time is not better: the changed-cells runs were slower than the full redraw in both runs at both sizes, but at 80 by 24 the spread between runs is as large as the difference, so these runs do not show whether it is a real cost.
+- At 60 frames a second a frame has about 16.7 ms, and both ways fit easily at these sizes. The gain is in the bytes, not the CPU.
+
 ## Contributing
 
 Small, friendly pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has short recipes for adding a palette, a `World` setting or an example, and [CLAUDE.md](CLAUDE.md) explains the principles and process.

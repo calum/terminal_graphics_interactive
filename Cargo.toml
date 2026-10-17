@@ -23,6 +23,10 @@ harness = false
 name = "art"
 harness = false
 
+[[bench]]
+name = "render"
+harness = false
+
 # The program that runs on the website: compiled to WebAssembly by the Pages workflow.
 [[example]]
 name = "web_art"

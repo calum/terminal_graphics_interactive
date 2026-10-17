@@ -3,6 +3,7 @@
 use crate::event::Event;
 use crate::input::{Input, MAX_TIMEOUT};
 use crate::raw_mode::{RawMode, MOUSE_OFF, MOUSE_ON};
+use crate::renderer::Renderer;
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -53,16 +54,6 @@ fn size_from_reply(reply: Option<(u32, u32)>) -> (u32, u32) {
         Some((width, height)) if width > 0 && height > 0 => (width, height),
         _ => DEFAULT_SIZE,
     }
-}
-
-/// What to print to show `display`: park the cursor one row below where the
-/// display will go, because `Display::render` starts by moving up its height.
-fn frame_for(display: &Display) -> String {
-    let (_, height) = display.size();
-    if height == 0 {
-        return String::new();
-    }
-    format!("[{};1H{}", height + 1, display.render())
 }
 
 /// Reads `reader` on a background thread and sends each chunk it gets down the
@@ -128,6 +119,7 @@ fn spawn_reader(mut reader: impl Read + Send + 'static) -> io::Result<Receiver<V
 pub struct Terminal {
     input: Input,
     size: (u32, u32),
+    renderer: Renderer,
     /// Declared last so the terminal is restored after the sequences below are printed.
     _raw: RawMode,
 }
@@ -150,6 +142,7 @@ impl Terminal {
         Ok(Terminal {
             input,
             size,
+            renderer: Renderer::new(),
             _raw: raw,
         })
     }
@@ -178,10 +171,15 @@ impl Terminal {
     /// a cell. The display must be at most one row shorter than the terminal
     /// (`height() - 1`) and no wider than it, or it will be drawn off screen.
     ///
+    /// Only the cells that changed since the last call are sent, so a picture
+    /// that stays still costs almost nothing over a slow link. The first call
+    /// draws every cell. Text printed by hand between frames is not redrawn:
+    /// the next frame only sends the cells of `display` that changed.
+    ///
     /// Call it once per frame.
     pub fn draw(&mut self, display: &Display) -> io::Result<()> {
-        let mut out = io::stdout();
-        out.write_all(frame_for(display).as_bytes())?;
+        let mut out = io::stdout().lock();
+        self.renderer.draw_to(display, &mut out)?;
         out.flush()
     }
 
@@ -296,27 +294,6 @@ mod tests {
         assert_eq!(size_from_reply(Some((0, 0))), (80, 24));
         assert_eq!(size_from_reply(Some((0, 30))), (80, 24));
         assert_eq!(size_from_reply(Some((90, 0))), (80, 24));
-    }
-
-    #[test]
-    fn a_frame_puts_the_cursor_one_row_below_the_display_then_renders_it() {
-        // render() moves up by the display height, which lands on row 1
-        let mut display = Display::new(10, 3);
-        display.set_pixel(
-            0,
-            0,
-            'x',
-            terminal_graphics::Colour::Red,
-            terminal_graphics::Colour::Blue,
-        );
-        let frame = frame_for(&display);
-        assert!(frame.starts_with("\x1b[4;1H"), "{frame:?}");
-        assert!(frame.ends_with(&display.render()));
-    }
-
-    #[test]
-    fn a_frame_for_an_empty_display_is_empty() {
-        assert_eq!(frame_for(&Display::new(10, 0)), "");
     }
 
     #[test]
