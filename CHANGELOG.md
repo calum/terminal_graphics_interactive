@@ -2,7 +2,9 @@
 
 ## Unreleased
 
+- `game::Keys` (held, pressed and released keys, with timing-based fallback: a press is held for 300 ms, each OS repeat extends it by 100 ms, and real releases from the kitty protocol end it at once) and `game::Controls` (named actions bound to keys, so players can rebind them). Pure logic with an injected clock, so it is tested with no terminal.
 - `Event::KeyUp(Key)` and parsing of the kitty keyboard protocol: key release events from terminals that support it (kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2, recent Windows Terminal), with key repeats still arriving as `Event::Key`. Enabling the protocol (`Terminal::enable_key_release`) comes later.
+- `Terminal::enable_key_release` (kitty keyboard protocol key-release events where the terminal supports it; it asks first and returns `false` otherwise) and `Terminal::has_key_release`.
 - `Terminal::draw` now sends only the cells that changed; the first call draws everything. New public `Renderer` writes diffed frames to any `Write` (`Renderer::draw_to`, `Renderer::invalidate`). `cargo bench --bench render` compares it with a full redraw; see the README.
 - `Terminal`: an interactive session. `Terminal::start()` enters raw mode,
   turns on mouse reporting and hides the cursor, and reads input on a

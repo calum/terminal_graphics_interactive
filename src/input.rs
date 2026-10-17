@@ -69,6 +69,40 @@ impl Input {
         size
     }
 
+    /// Waits up to `timeout` for the terminal's answer to the key release
+    /// support query (`ESC [ ? u` followed by `ESC [ c`), which the caller has
+    /// just sent. Every terminal answers the second query, and the replies come
+    /// in order, so the first query's answer is known once the second arrives.
+    /// Returns `true` only if the keyboard flags reply came first. Keys and
+    /// mouse events that arrive meanwhile are kept for `poll`.
+    pub(crate) fn request_key_release_support(&mut self, timeout: Duration) -> bool {
+        // a reply that arrived earlier answers an earlier question
+        self.parser.take_keyboard_flags();
+        self.parser.take_attributes_reply();
+        let deadline = Instant::now() + timeout.min(MAX_TIMEOUT);
+        let mut flags_seen = false;
+        loop {
+            while let Some(event) = self.parser.next_event() {
+                self.queue.push_back(event);
+            }
+            flags_seen |= self.parser.take_keyboard_flags().is_some();
+            if self.parser.take_attributes_reply() {
+                return flags_seen;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match self.chunks.recv_timeout(remaining) {
+                Ok(bytes) => {
+                    self.parser.feed(&bytes);
+                    self.pending_since = None;
+                }
+                Err(_) => return false,
+            }
+        }
+    }
+
     /// Waits up to `timeout` for the next event. `Ok(None)` means the time ran
     /// out; an error means the input has ended (stdin was closed).
     pub(crate) fn poll(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
@@ -326,5 +360,78 @@ mod tests {
         drop(tx);
         assert_eq!(input.poll(LONG).unwrap(), Some(key(KeyCode::Esc)));
         assert!(input.poll(LONG).is_err());
+    }
+
+    const KEY_QUERY_REPLY: &[u8] = b"\x1b[?11u";
+    const ATTRIBUTES_REPLY: &[u8] = b"\x1b[?62;22c";
+
+    #[test]
+    fn key_release_is_supported_when_both_replies_come_in_one_chunk() {
+        let (tx, mut input) = input();
+        tx.send([KEY_QUERY_REPLY, ATTRIBUTES_REPLY].concat())
+            .unwrap();
+        assert!(input.request_key_release_support(LONG));
+    }
+
+    #[test]
+    fn key_release_is_not_supported_when_only_the_attributes_reply_comes() {
+        let (tx, mut input) = input();
+        tx.send(ATTRIBUTES_REPLY.to_vec()).unwrap();
+        assert!(!input.request_key_release_support(LONG));
+    }
+
+    #[test]
+    fn key_release_is_not_supported_when_neither_reply_comes_in_time() {
+        let (_tx, mut input) = input();
+        let start = Instant::now();
+        assert!(!input.request_key_release_support(Duration::from_millis(50)));
+        assert!(start.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn key_release_support_is_the_same_wherever_the_replies_are_split() {
+        let both = [KEY_QUERY_REPLY, ATTRIBUTES_REPLY].concat();
+        for split in 1..both.len() {
+            let (tx, mut input) = input();
+            tx.send(both[..split].to_vec()).unwrap();
+            tx.send(both[split..].to_vec()).unwrap();
+            assert!(input.request_key_release_support(LONG), "split at {split}");
+        }
+        for split in 1..ATTRIBUTES_REPLY.len() {
+            let (tx, mut input) = input();
+            tx.send(ATTRIBUTES_REPLY[..split].to_vec()).unwrap();
+            tx.send(ATTRIBUTES_REPLY[split..].to_vec()).unwrap();
+            assert!(!input.request_key_release_support(LONG), "split at {split}");
+        }
+    }
+
+    #[test]
+    fn a_key_typed_while_waiting_is_kept_for_poll_and_does_not_break_detection() {
+        let (tx, mut input) = input();
+        tx.send(b"a".to_vec()).unwrap();
+        tx.send([KEY_QUERY_REPLY, ATTRIBUTES_REPLY].concat())
+            .unwrap();
+        assert!(input.request_key_release_support(LONG));
+        assert_eq!(input.poll(SHORT).unwrap(), Some(key(KeyCode::Char('a'))));
+        assert_eq!(input.poll(SHORT).unwrap(), None);
+    }
+
+    #[test]
+    fn reply_bytes_never_come_out_of_poll_as_events() {
+        let (tx, mut input) = input();
+        tx.send([KEY_QUERY_REPLY, ATTRIBUTES_REPLY].concat())
+            .unwrap();
+        assert!(input.request_key_release_support(LONG));
+        assert_eq!(input.poll(SHORT).unwrap(), None);
+    }
+
+    #[test]
+    fn a_stale_reply_from_before_the_request_does_not_count() {
+        let (tx, mut input) = input();
+        tx.send(KEY_QUERY_REPLY.to_vec()).unwrap();
+        // the flags reply arrives, but the request is made after it was read
+        assert_eq!(input.poll(SHORT).unwrap(), None);
+        tx.send(ATTRIBUTES_REPLY.to_vec()).unwrap();
+        assert!(!input.request_key_release_support(LONG));
     }
 }

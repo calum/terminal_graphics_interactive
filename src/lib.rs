@@ -5,6 +5,7 @@
 mod art;
 mod clock;
 mod event;
+pub mod game;
 mod input;
 mod parser;
 mod raw_mode;
