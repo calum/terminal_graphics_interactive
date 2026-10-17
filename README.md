@@ -2,13 +2,14 @@
 
 Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
 
-**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, a paint example, and [`llms.txt`](llms.txt) for AI coding agents. Next: more examples (a game, a screensaver) and terminal resize events.
+**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, a paint example, and [`llms.txt`](llms.txt) for AI coding agents. Next: a game example and terminal resize events.
 
 ## Try it
 
 ```sh
-cargo run --example paint     # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
-cargo run --example events    # prints every key and mouse event
+cargo run --example paint        # drag to paint, right-drag to erase, 1-8 or scroll for colour, c clears, q quits
+cargo run --example screensaver   # bouncing dots with fading trails; click to add one, any key quits
+cargo run --example events       # prints every key and mouse event
 ```
 
 It works in Windows PowerShell and Windows Terminal, Linux and macOS terminals, and over SSH if you allocate a terminal (`ssh -t host ...`).
