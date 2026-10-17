@@ -11,7 +11,20 @@ use std::f32::consts::{PI, TAU};
 use terminal_graphics_interactive::game::*;
 
 fn main() -> std::io::Result<()> {
-    run(Title::new(0))
+    run(start(tuning()))
+}
+
+/// The numbers the website lets you change while the game runs.
+pub fn tuning() -> Tuning {
+    Tuning::new()
+        .knob("fireball_rate", "fireball rate (x)", 1.0, 0.2, 3.0)
+        .knob("wave_height", "wave height (x)", 1.0, 0.0, 2.0)
+        .knob("boat_speed", "boat speed (x)", 1.0, 0.5, 2.0)
+}
+
+/// The title screen, reading `tuning` while it plays.
+pub fn start(tuning: Tuning) -> impl Game {
+    Title::new(0).tuned(tuning)
 }
 
 // ---------------------------------------------------------------------------
@@ -166,10 +179,17 @@ fn swells(progress: f32, phase: f32) -> [(f32, f32, f32); 4] {
 
 /// The sea at `progress`, at play time `t`, for a run with the given `phase`.
 /// It is rebuilt every tick. The swells change slowly, so the height at one
-/// column changes only a little from one tick to the next.
+/// column changes only a little from one tick to the next. The game itself now
+/// calls [`sea_scaled`]; this is the unscaled sea the tests compare against.
+#[cfg(test)]
 fn sea(progress: f32, t: f32, phase: f32, rows: f32) -> Waves {
+    sea_scaled(progress, t, phase, rows, 1.0)
+}
+
+/// [`sea`] with every swell's height multiplied by `scale` (the wave height knob).
+fn sea_scaled(progress: f32, t: f32, phase: f32, rows: f32, scale: f32) -> Waves {
     let set = 1.0 + SET_DEPTH * (SET_SPEED * t + phase).sin();
-    let fit = swell_fit(progress, rows);
+    let fit = swell_fit(progress, rows) * scale;
     let mut waves = Waves::new();
     for (height, wavelength, speed) in swells(progress, phase) {
         waves = waves.layer(height * set * fit, wavelength, speed);
@@ -1081,6 +1101,9 @@ struct Title {
     best: u32,
     look: Look,
     letters: [Sprite; 4],
+    tuning: Tuning,
+    /// The wave height knob as the last update read it.
+    wave_scale: f32,
 }
 
 impl Title {
@@ -1094,14 +1117,23 @@ impl Title {
                 Sprite::new(LETTER_I, Colour::BrightGreen),
                 Sprite::new(LETTER_L, Colour::BrightCyan),
             ],
+            tuning: Tuning::new(),
+            wave_scale: 1.0,
         }
+    }
+
+    /// Reads the knobs from `tuning` while the title plays, and hands them on.
+    fn tuned(mut self, tuning: Tuning) -> Title {
+        self.tuning = tuning;
+        self
     }
 }
 
 impl Game for Title {
     fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        self.wave_scale = wave_scale_of(&self.tuning);
         if ctx.keys.pressed(KeyCode::Enter) {
-            Next::switch(Play::new(ctx.seed, self.best))
+            Next::switch(Play::new(ctx.seed, self.best).tuned(self.tuning.clone()))
         } else if ctx.keys.pressed(KeyCode::Char('q')) {
             Next::quit()
         } else {
@@ -1115,7 +1147,7 @@ impl Game for Title {
         let t = screen.time();
         let rows = screen.height() as f32;
         let water = level(rows);
-        let waves = sea(0.0, t, 0.0, rows);
+        let waves = sea_scaled(0.0, t, 0.0, rows, self.wave_scale);
         paint_sky(screen, &self.look.sky, daylight(t * 0.25), 0.0, t, rows);
         paint_sea(screen, &self.look.sea, &waves, t, water);
         // the island scrolls away as the boat sails, one league a second
@@ -1186,6 +1218,9 @@ struct Over {
     progress: f32,
     phase: f32,
     look: Look,
+    tuning: Tuning,
+    /// The wave height the round ended with, so the sea does not jump.
+    wave_scale: f32,
 }
 
 impl Over {
@@ -1197,15 +1232,30 @@ impl Over {
             progress,
             phase,
             look: Look::new(),
+            tuning: Tuning::new(),
+            wave_scale: 1.0,
         }
+    }
+
+    /// Reads the knobs from `tuning`, and passes them on to the next round.
+    fn tuned(mut self, tuning: Tuning) -> Over {
+        self.tuning = tuning;
+        self
+    }
+
+    /// The wave height the sea is drawn with, as the round left it.
+    fn waves_at(mut self, scale: f32) -> Over {
+        self.wave_scale = scale;
+        self
     }
 }
 
 impl Game for Over {
     fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        self.wave_scale = wave_scale_of(&self.tuning);
         if ctx.keys.pressed(KeyCode::Enter) {
             let seed = ctx.seed.wrapping_add(ctx.tick);
-            Next::switch(Play::new(seed, self.best))
+            Next::switch(Play::new(seed, self.best).tuned(self.tuning.clone()))
         } else if ctx.keys.pressed(KeyCode::Char('q')) {
             Next::quit()
         } else {
@@ -1218,7 +1268,7 @@ impl Game for Over {
         let rows = screen.height() as f32;
         let water = level(rows);
         let light = daylight(self.at);
-        let waves = sea(self.progress, t, self.phase, rows);
+        let waves = sea_scaled(self.progress, t, self.phase, rows, self.wave_scale);
         paint_sky(screen, &self.look.sky, light, 0.0, t, rows);
         paint_stars(screen, night(light), t, (water - 4.0) * 2.0);
         paint_celestial(screen, &self.look, self.at, &waves, t, water);
@@ -1341,6 +1391,16 @@ struct Play {
     spray: Particles,
     wake: Timer,
     floaters: Pool<Floater>,
+    /// The knobs the page may change while the round runs.
+    tuning: Tuning,
+    /// The wave height knob as the last update read it. The draw uses it too,
+    /// so the boat sits on the waves that are drawn.
+    wave_scale: f32,
+}
+
+/// The wave height knob's value, or 1 when no knob is set.
+fn wave_scale_of(tuning: &Tuning) -> f32 {
+    tuning.get("wave_height", 1.0)
 }
 
 impl Play {
@@ -1350,6 +1410,8 @@ impl Play {
         Play {
             best,
             look: Look::new(),
+            tuning: Tuning::new(),
+            wave_scale: 1.0,
             elapsed: 0.0,
             distance: 0.0,
             bonus: 0,
@@ -1384,6 +1446,12 @@ impl Play {
             wake: Timer::every(WAKE_SECONDS),
             floaters: Pool::with_capacity(FLOATER_LIMIT),
         }
+    }
+
+    /// Reads the knobs from `tuning` while the round runs.
+    fn tuned(mut self, tuning: Tuning) -> Play {
+        self.tuning = tuning;
+        self
     }
 
     /// The score: a point for every tenth of a league sailed, and the bonuses.
@@ -1489,7 +1557,13 @@ impl Game for Play {
         let t = self.elapsed;
         let water = level(screen.height() as f32);
         let progress = progress_of(self.distance);
-        let waves = sea(progress, t, self.phase, screen.height() as f32);
+        let waves = sea_scaled(
+            progress,
+            t,
+            self.phase,
+            screen.height() as f32,
+            self.wave_scale,
+        );
         let light = daylight(t);
         let flash = if self.flashing() { 1.0 } else { 0.0 };
         paint_sky(
@@ -1545,16 +1619,23 @@ impl Game for Play {
         let dt = ctx.dt;
         let (width, rows) = (ctx.size.0 as f32, ctx.size.1 as f32);
         let water = level(rows);
+        self.wave_scale = wave_scale_of(&self.tuning);
+        let boat_speed = self.tuning.get("boat_speed", 1.0);
+        let fireball_rate = self.tuning.get("fireball_rate", 1.0);
         self.elapsed += dt;
         self.distance += sail_speed(progress_of(self.distance)) * dt;
         let progress = progress_of(self.distance);
         let t = self.elapsed;
-        let waves = sea(progress, t, self.phase, rows);
+        let waves = sea_scaled(progress, t, self.phase, rows, self.wave_scale);
 
         self.boat.place(width, |x| keel_under(&waves, x, t, water));
         let across = self.controls.axis(ctx.keys, Action::Left, Action::Right) as f32;
-        self.boat
-            .steer(across * SAIL_SPEED, dt, width * 0.2, width * 0.6);
+        self.boat.steer(
+            across * SAIL_SPEED * boat_speed,
+            dt,
+            width * 0.2,
+            width * 0.6,
+        );
         let target = keel_under(&waves, self.boat.centre(), t, water);
         self.boat.settle(target, dt);
 
@@ -1567,7 +1648,8 @@ impl Game for Play {
         self.steam.step(dt);
         self.embers.step(dt);
 
-        self.spawn.set_seconds(spawn_interval(progress));
+        self.spawn
+            .set_seconds(spawn_interval(progress) / fireball_rate);
         let horizon = 2.0 * water;
         for _ in 0..self.spawn.ticks(dt) {
             self.launch(width, horizon, progress);
@@ -1591,7 +1673,8 @@ impl Game for Play {
         self.floaters.retain(|floater| floater.age < FLOATER_LIFE);
         if self.lives == 0 {
             let best = self.best.max(self.score());
-            return Next::switch(Over::new(self.score(), best, t, progress, self.phase));
+            let over = Over::new(self.score(), best, t, progress, self.phase);
+            return Next::switch(over.tuned(self.tuning.clone()).waves_at(self.wave_scale));
         }
         Next::stay()
     }
@@ -2961,6 +3044,245 @@ mod tests {
         assert!(swell_fit(1.0, 24.0) < 1.0, "24 rows: scaled a little");
         assert!(swell_fit(1.0, 20.0) < 1.0, "20 rows: scaled down");
         assert_eq!(swell_fit(0.0, 20.0), 1.0, "the calm sea always fits");
+    }
+
+    /// The cells of the screen as (character, colour, background), row by row.
+    fn cells(game: &mut Headless) -> Vec<(char, Colour, Colour)> {
+        cells_of(game.screen())
+    }
+
+    /// The cells of `screen` as (character, colour, background), row by row.
+    fn cells_of(screen: &Screen) -> Vec<(char, Colour, Colour)> {
+        let (width, height) = screen.size();
+        let display = screen.display();
+        let mut out = Vec::new();
+        for y in 0..height as isize {
+            for x in 0..width as isize {
+                let pixel = display.pixel(x, y).expect("the cell is on screen");
+                out.push((pixel.character(), pixel.colour(), pixel.background()));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_tuning_has_the_three_knobs_at_their_defaults() {
+        let knobs = tuning().knobs();
+        let names: Vec<&str> = knobs.iter().map(|k| k.name).collect();
+        assert_eq!(names, ["fireball_rate", "wave_height", "boat_speed"]);
+        assert!(knobs.iter().all(|k| k.default == 1.0), "{knobs:?}");
+    }
+
+    #[test]
+    fn with_the_default_tuning_a_round_looks_exactly_as_it_did_before() {
+        let mut plain = Headless::new(Title::new(0)).seed(1).size(80, 24);
+        let mut tuned = Headless::new(start(tuning())).seed(1).size(80, 24);
+        plain.tap(KeyCode::Enter);
+        tuned.tap(KeyCode::Enter);
+        plain.step(600);
+        tuned.step(600);
+        assert_eq!(tuned.text(), plain.text());
+        assert_eq!(cells(&mut tuned), cells(&mut plain), "the colours too");
+    }
+
+    /// Paints `game` on a fresh screen and finishes the frame, as the loop does.
+    fn painted(game: &impl Game, width: u32, height: u32) -> Screen {
+        let mut screen = Screen::new(width, height);
+        screen.clear(Colour::Black);
+        game.draw(&mut screen);
+        screen.finish_frame();
+        screen
+    }
+
+    /// Whether the deepest rows of the sea look the same in every column.
+    fn deep_water_is_flat(screen: &Screen) -> bool {
+        let display = screen.display();
+        let cell = |x: isize, y: isize| {
+            display
+                .pixel(x, y)
+                .map(|p| (p.character(), p.colour(), p.background()))
+        };
+        (20..24).all(|y| (0..80).all(|x| cell(x, y) == cell(0, y)))
+    }
+
+    #[test]
+    fn the_fireball_rate_sends_more_fireballs_when_it_is_higher() {
+        fn in_the_air_after_900_ticks(rate: f32) -> usize {
+            let knobs = tuning();
+            knobs.set("fireball_rate", rate);
+            let mut play = Play::new(1, 0).tuned(knobs);
+            let mut rig = Rig::new((80, 24));
+            rig.run(&mut play, 900);
+            play.fireballs.len()
+        }
+        let high = in_the_air_after_900_ticks(3.0);
+        let low = in_the_air_after_900_ticks(0.2);
+        assert!(high > low, "at 3x there were {high}, at 0.2x {low}");
+    }
+
+    #[test]
+    fn a_wave_height_of_nothing_makes_the_sea_flat() {
+        let flat = sea_scaled(1.0, 3.7, 0.4, 24.0, 0.0);
+        for x in 0..80 {
+            assert_eq!(flat.height(x as f32, 3.7), 0.0, "column {x}");
+        }
+    }
+
+    #[test]
+    fn a_wave_height_of_two_raises_the_biggest_swell() {
+        let biggest = |scale: f32| {
+            let mut most = 0.0_f32;
+            for i in 0..200 {
+                let t = i as f32 * 0.1;
+                let waves = sea_scaled(1.0, t, 0.4, 24.0, scale);
+                for x in 0..80 {
+                    most = most.max(waves.height(x as f32, t).abs());
+                }
+            }
+            most
+        };
+        let normal = biggest(1.0);
+        let doubled = biggest(2.0);
+        assert!(doubled > 1.9 * normal, "{doubled} against {normal}");
+    }
+
+    #[test]
+    fn the_round_reads_the_wave_height_on_every_update() {
+        let knobs = tuning();
+        knobs.set("wave_height", 0.0);
+        let mut play = Play::new(1, 0).tuned(knobs.clone());
+        let mut rig = Rig::new((80, 24));
+        rig.run(&mut play, 1);
+        assert_eq!(play.wave_scale, 0.0);
+        knobs.set("wave_height", 2.0);
+        rig.run(&mut play, 1);
+        assert_eq!(play.wave_scale, 2.0);
+    }
+
+    #[test]
+    fn with_no_wave_height_the_water_is_drawn_flat_in_every_column() {
+        let knobs = tuning();
+        knobs.set("wave_height", 0.0);
+        let mut play = Play::new(1, 0).tuned(knobs);
+        play.spawn = Timer::every(1000.0);
+        let mut rig = Rig::new((80, 24));
+        rig.run(&mut play, 300);
+        assert!(deep_water_is_flat(&painted(&play, 80, 24)), "flat when 0");
+    }
+
+    #[test]
+    fn the_drawn_sea_follows_the_wave_height_the_round_last_read() {
+        let mut play = quiet(1);
+        let mut rig = Rig::new((80, 24));
+        rig.run(&mut play, 300);
+        play.wave_scale = 0.0;
+        let flat = cells_of(&painted(&play, 80, 24));
+        play.wave_scale = 2.0;
+        let high = cells_of(&painted(&play, 80, 24));
+        assert_ne!(flat, high, "the picture ignored the wave height");
+    }
+
+    #[test]
+    fn the_game_over_sea_keeps_the_flat_water_it_ended_with() {
+        let over = Over::new(3, 9, 0.0, 0.0, 0.0).waves_at(0.0);
+        assert!(deep_water_is_flat(&painted(&over, 80, 24)));
+    }
+
+    #[test]
+    fn boat_speed_two_sails_farther_in_thirty_steps_than_one() {
+        fn sailed_in_thirty_steps(speed: f32) -> f32 {
+            let knobs = tuning();
+            knobs.set("boat_speed", speed);
+            let mut play = Play::new(1, 0).tuned(knobs);
+            play.spawn = Timer::every(1000.0);
+            let mut rig = Rig::new((80, 24));
+            rig.run(&mut play, 1);
+            let before = play.boat.x;
+            rig.press(KeyCode::Right);
+            rig.run(&mut play, 30);
+            play.boat.x - before
+        }
+        let normal = sailed_in_thirty_steps(1.0);
+        let fast = sailed_in_thirty_steps(2.0);
+        assert!(fast > 1.5 * normal, "at 2x {fast} columns, at 1x {normal}");
+    }
+
+    #[test]
+    fn a_knob_moved_during_a_round_changes_that_round_at_once() {
+        fn sailed_in_the_last_thirty(change_to: Option<f32>) -> f32 {
+            let knobs = tuning();
+            let mut play = Play::new(1, 0).tuned(knobs.clone());
+            play.spawn = Timer::every(1000.0);
+            let mut rig = Rig::new((400, 24));
+            rig.run(&mut play, 1);
+            rig.press(KeyCode::Right);
+            rig.run(&mut play, 60);
+            if let Some(speed) = change_to {
+                knobs.set("boat_speed", speed);
+            }
+            let before = play.boat.x;
+            rig.run(&mut play, 30);
+            play.boat.x - before
+        }
+        let unchanged = sailed_in_the_last_thirty(None);
+        let changed = sailed_in_the_last_thirty(Some(2.0));
+        assert!(
+            changed > 1.3 * unchanged,
+            "after the change {changed}, without it {unchanged}"
+        );
+    }
+
+    #[test]
+    fn the_title_hands_its_tuning_on_to_the_round_it_starts() {
+        let knobs = tuning();
+        let mut game = Headless::new(start(knobs.clone())).seed(1).size(80, 24);
+        game.tap(KeyCode::Enter);
+        knobs.set("wave_height", 0.0);
+        game.step(120);
+        let mut control = Headless::new(start(tuning())).seed(1).size(80, 24);
+        control.tap(KeyCode::Enter);
+        control.step(120);
+        assert_ne!(
+            game.text(),
+            control.text(),
+            "the round saw the new wave height"
+        );
+    }
+
+    #[test]
+    fn the_game_over_screen_hands_its_tuning_on_to_the_next_round() {
+        let knobs = tuning();
+        let over = Over::new(3, 9, 0.0, 0.0, 0.0).tuned(knobs.clone());
+        let mut game = Headless::new(over).seed(1).size(80, 24);
+        game.tap(KeyCode::Enter);
+        knobs.set("wave_height", 0.0);
+        game.step(120);
+        let over = Over::new(3, 9, 0.0, 0.0, 0.0).tuned(tuning());
+        let mut control = Headless::new(over).seed(1).size(80, 24);
+        control.tap(KeyCode::Enter);
+        control.step(120);
+        assert_ne!(
+            game.text(),
+            control.text(),
+            "the next round saw the new wave height"
+        );
+    }
+
+    #[test]
+    fn with_no_wave_height_the_boat_settles_on_the_flat_water_that_is_drawn() {
+        let knobs = tuning();
+        knobs.set("wave_height", 0.0);
+        let mut play = Play::new(1, 0).tuned(knobs);
+        play.distance = DISTANCE_MAX;
+        play.spawn = Timer::every(1000.0);
+        let mut rig = Rig::new((80, 24));
+        rig.run(&mut play, 600);
+        let flat_keel = 2.0 * level(24.0) + 1.0;
+        assert!(
+            (play.boat.keel - flat_keel).abs() < 0.5,
+            "keel {} should sit at the flat water {flat_keel}",
+            play.boat.keel
+        );
     }
 
     #[test]

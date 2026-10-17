@@ -30,10 +30,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      # The art editor and the games are two modules, so the art page does not download game code.
       - run: cargo build --release --example web_art --target wasm32-unknown-unknown
+      - run: cargo build --release --example web_games --target wasm32-unknown-unknown
       - run: cargo run --example build_site
-      # The runner's Google Chrome loads the built site and drives its real
-      # buttons, editor and mouse handlers. --require fails if there is no browser.
+      # The runner's Google Chrome loads the landing page, the art page and the
+      # games page, follows an old share link, plays a game with keys and touch
+      # buttons and drags a tuner slider. --require fails if there is no browser.
       - run: cargo run --release --example check_site -- --require
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'

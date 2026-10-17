@@ -9,7 +9,7 @@ use std::f32::consts::TAU;
 use terminal_graphics_interactive::game::*;
 
 fn main() -> std::io::Result<()> {
-    run(Title)
+    run(start(tuning()))
 }
 
 /// Seconds in a round.
@@ -154,6 +154,48 @@ fn controls() -> Controls<Action> {
         .bind(Action::Pause, &[KeyCode::Char('p'), KeyCode::Esc])
 }
 
+/// The numbers the website lets you change while the game runs.
+pub fn tuning() -> Tuning {
+    Tuning::new()
+        .knob("mote_rate", "motes per second (x)", 1.0, 0.25, 4.0)
+        .knob(
+            "round_length",
+            "round length (seconds)",
+            ROUND_SECONDS,
+            10.0,
+            120.0,
+        )
+}
+
+/// The game with the website's knobs: the title screen, then a round that
+/// reads `tuning` while it plays.
+pub fn start(tuning: Tuning) -> impl Game {
+    Opening {
+        title: Title,
+        tuning,
+    }
+}
+
+/// The title screen of a game that reads `tuning`.
+struct Opening {
+    title: Title,
+    tuning: Tuning,
+}
+
+impl Game for Opening {
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Enter) {
+            Next::switch(Play::new(ctx.seed).with(self.tuning.clone()))
+        } else {
+            self.title.update(ctx)
+        }
+    }
+
+    fn draw(&self, screen: &mut Screen) {
+        self.title.draw(screen);
+    }
+}
+
 /// The first screen: the sky, the name and how to start.
 struct Title;
 
@@ -218,11 +260,14 @@ struct Play {
     light_glow: Palette,
     trail: Palette,
     mote_glow: Palette,
+    /// The website's knobs; an empty set gives today's round.
+    tuning: Tuning,
 }
 
 impl Play {
     fn new(seed: u64) -> Play {
         Play {
+            tuning: Tuning::new(),
             score: 0,
             light: Light::default(),
             motes: Pool::with_capacity(MOTE_LIMIT),
@@ -237,6 +282,12 @@ impl Play {
             trail: trail_palette(),
             mote_glow: mote_palette(),
         }
+    }
+
+    /// The same round, reading `tuning` for its knobs.
+    fn with(mut self, tuning: Tuning) -> Play {
+        self.tuning = tuning;
+        self
     }
 
     /// Eases the velocity toward what the keys ask for (and the pointer, while
@@ -346,12 +397,18 @@ impl Game for Play {
             self.light.x = ctx.size.0 as f32 / 2.0;
             self.light.y = ctx.size.1 as f32 / 2.0;
         }
+        // the round's length is live: a new length keeps the time already played
+        self.clock.set_seconds(self.round_seconds());
         if self.clock.tick(ctx.dt) {
-            return Next::switch(Over { score: self.score });
+            return Next::switch(Ended {
+                over: Over { score: self.score },
+                tuning: self.tuning.clone(),
+            });
         }
         self.steer(ctx);
         self.drift(ctx);
-        if self.spawn.tick(ctx.dt) {
+        // the spawn clock is every half second; the knob runs it faster
+        if self.spawn.tick(ctx.dt * self.tuning.get("mote_rate", 1.0)) {
             self.spawn_mote(ctx.size);
         }
         self.collect();
@@ -367,12 +424,22 @@ impl Game for Play {
     fn draw(&self, screen: &mut Screen) {
         draw_sky(screen, &self.pulses);
         self.draw_halos(screen);
-        hud(screen, self.score, self.clock.remaining());
+        hud(
+            screen,
+            self.score,
+            self.clock.remaining(),
+            self.round_seconds(),
+        );
         self.draw_shapes(screen);
     }
 }
 
 impl Play {
+    /// The round's length in seconds, from the website's knob (45 by default).
+    fn round_seconds(&self) -> f32 {
+        self.tuning.get("round_length", ROUND_SECONDS)
+    }
+
     /// Whether the first update has put the light on the screen. Until then
     /// the light is at the corner, and a frame drawn now must not show it.
     fn placed(&self) -> bool {
@@ -416,12 +483,12 @@ impl Play {
 }
 
 /// The score and the time left, on a black strip along the top.
-fn hud(screen: &mut Screen, score: u32, seconds_left: f32) {
+fn hud(screen: &mut Screen, score: u32, seconds_left: f32, round_seconds: f32) {
     let width = screen.width();
     screen.fill(0, 0, width, 1, ' ', Colour::White, Colour::Black);
     screen.text(1, 0, &format!("score {score}"), Colour::BrightYellow);
     screen.text(width - 31, 0, &format!("{seconds_left:.1}s"), Colour::White);
-    let fraction = seconds_left / ROUND_SECONDS;
+    let fraction = seconds_left / round_seconds;
     screen.bar(
         width - 24,
         0,
@@ -459,6 +526,27 @@ impl Game for Over {
             Colour::BrightWhite,
         );
         plate(screen, middle + 2, "Enter: again   q: quit", Colour::White);
+    }
+}
+
+/// The game-over screen of a game that reads `tuning`: Enter starts a round
+/// that reads it too.
+struct Ended {
+    over: Over,
+    tuning: Tuning,
+}
+
+impl Game for Ended {
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        if ctx.keys.pressed(KeyCode::Enter) {
+            Next::switch(Play::new(ctx.seed.wrapping_add(ctx.tick)).with(self.tuning.clone()))
+        } else {
+            self.over.update(ctx)
+        }
+    }
+
+    fn draw(&self, screen: &mut Screen) {
+        self.over.draw(screen);
     }
 }
 
@@ -1225,6 +1313,124 @@ mod tests {
             scripted_game(7),
             scripted_game(8),
             "another seed is another game"
+        );
+    }
+
+    #[test]
+    fn the_website_gets_two_knobs_named_mote_rate_and_round_length() {
+        let names: Vec<&str> = tuning().knobs().iter().map(|k| k.name).collect();
+        assert_eq!(names, ["mote_rate", "round_length"]);
+    }
+
+    #[test]
+    fn the_default_knob_values_are_todays_numbers() {
+        let knobs = tuning().knobs();
+        assert_eq!(knobs[0].default, 1.0, "one times today's spawn rate");
+        assert_eq!(knobs[1].default, ROUND_SECONDS);
+    }
+
+    #[test]
+    fn the_website_start_plays_exactly_like_the_plain_title_with_the_defaults() {
+        let mut plain = Headless::new(Title).seed(1);
+        plain.tap(KeyCode::Enter);
+        plain.step(300);
+        let mut tuned = Headless::new(start(tuning())).seed(1);
+        tuned.tap(KeyCode::Enter);
+        tuned.step(300);
+        assert_eq!(picture(&mut tuned), picture(&mut plain));
+    }
+
+    /// How many motes a round with `rate` has after `updates` updates.
+    fn motes_after(rate: f32, updates: u32) -> usize {
+        let knobs = tuning();
+        knobs.set("mote_rate", rate);
+        let mut play = Play::new(1).with(knobs);
+        for _ in 0..updates {
+            update(&mut play, &Keys::new(), &Pointer::default());
+        }
+        play.motes.len()
+    }
+
+    #[test]
+    fn a_higher_mote_rate_gives_more_motes_in_the_same_time() {
+        let slow = motes_after(0.25, 120);
+        let fast = motes_after(4.0, 120);
+        assert!(fast > slow, "fast {fast} slow {slow}");
+    }
+
+    #[test]
+    fn a_round_length_of_10_seconds_ends_the_round_after_10_seconds() {
+        let knobs = tuning();
+        knobs.set("round_length", 10.0);
+        let mut game = Headless::new(start(knobs));
+        game.tap(KeyCode::Enter);
+        game.step(9 * 60);
+        assert!(!game.text().contains("TIME!"), "still playing at 9 s");
+        game.step(2 * 60);
+        assert!(game.text().contains("TIME!"), "the round is over by 11 s");
+    }
+
+    /// The seconds the HUD shows on row 0, e.g. `44.1` from `... 44.1s`.
+    fn shown_seconds(text: &str) -> f32 {
+        row(text, 0)
+            .split_whitespace()
+            .find_map(|word| word.strip_suffix('s')?.parse::<f32>().ok())
+            .unwrap_or(f32::NAN)
+    }
+
+    #[test]
+    fn moving_the_round_length_mid_round_changes_the_time_shown() {
+        let knobs = tuning();
+        let mut game = Headless::new(start(knobs.clone()));
+        game.tap(KeyCode::Enter);
+        game.step(60);
+        assert!(shown_seconds(&game.text()) > 43.0, "{}", game.text());
+        knobs.set("round_length", 20.0);
+        game.step(1);
+        let shown = shown_seconds(&game.text());
+        assert!(
+            shown > 18.0 && shown < 19.5,
+            "shown {shown}: {}",
+            game.text()
+        );
+    }
+
+    /// How many of the 20 cells of the HUD's time bar are full. Full cells are
+    /// bright white and empty ones bright black, both drawn as blocks.
+    fn full_bar_cells(game: &mut Headless) -> usize {
+        let screen = game.screen();
+        let width = screen.size().0 as i32;
+        (width - 24..width - 4)
+            .filter(|&x| cell_of(screen, x, 0).2 == Colour::BrightWhite)
+            .count()
+    }
+
+    #[test]
+    fn the_time_bar_shows_the_share_of_a_longer_round_that_is_left() {
+        let knobs = tuning();
+        knobs.set("round_length", 20.0);
+        let mut game = Headless::new(start(knobs));
+        game.tap(KeyCode::Enter);
+        game.step(60);
+        let full = full_bar_cells(&mut game);
+        assert!(full >= 17, "about 19 of 20 cells: {full}");
+    }
+
+    #[test]
+    fn again_after_a_10_second_round_is_another_10_second_round() {
+        let knobs = tuning();
+        knobs.set("round_length", 10.0);
+        let mut game = Headless::new(start(knobs));
+        game.tap(KeyCode::Enter);
+        game.step(10 * 60 + 2);
+        assert!(game.text().contains("TIME!"), "the first round is over");
+        game.tap(KeyCode::Enter);
+        game.step(9 * 60);
+        assert!(!game.text().contains("TIME!"), "still playing at 9 s");
+        game.step(2 * 60);
+        assert!(
+            game.text().contains("TIME!"),
+            "the second round is 10 s too"
         );
     }
 

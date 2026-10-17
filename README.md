@@ -94,7 +94,7 @@ impl Game for Title {
 }
 ```
 
-What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the website for games is coming.
+What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the games also run on the website (`/games/`, the real games as WebAssembly), which a headless browser check loads but no person has looked at yet. Multiplayer is coming; it is not built.
 
 To test a game without a terminal, use `Headless`. It runs the same updates as `run`: you press keys, step time and read back what was drawn, as `tests/game_api.rs` and the tests in `examples/quickgame.rs` do.
 
@@ -187,7 +187,7 @@ Small, friendly pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) ha
 
 ## Links
 
-- Website with a live editor: https://calum.github.io/terminal_graphics_interactive/
+- Website with a live editor and playable games: https://calum.github.io/terminal_graphics_interactive/ (art at `/art/`, games at `/games/`)
 - crates.io: https://crates.io/crates/terminal_graphics_interactive
 - API documentation: https://docs.rs/terminal_graphics_interactive
 - The graphics crate it builds on: https://github.com/calum/terminal_graphics_api

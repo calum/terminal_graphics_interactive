@@ -7,9 +7,9 @@ fn main() -> std::io::Result<()> {
     run(Title { score: None })
 }
 
-/// The title. After a round it shows the score instead.
-struct Title {
-    score: Option<u32>,
+/// The title (public so the website can start the game here). After a round it shows the score.
+pub struct Title {
+    pub score: Option<u32>,
 }
 
 impl Game for Title {

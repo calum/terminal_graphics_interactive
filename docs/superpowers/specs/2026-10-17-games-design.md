@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases 1 to 3 are built. Phase 4 onward is not.
+Phases 1 to 5 are built. Phase 6 (multiplayer) is not.
 
 - **Phase 1, built:** a shared fixed timestep clock (`clock::FixedStep`, used by the game loop and by the art stage) and a diffing `Renderer` behind `Terminal::draw`, with a benchmark and its numbers in the README.
 - **Phase 2, built:** key release events from the kitty keyboard protocol, `Keys` (held, pressed and released; timed where the terminal sends no releases) and `Controls` (named actions that can be rebound).
@@ -12,10 +12,11 @@ Phases 1 to 3 are built. Phase 4 onward is not.
 
 `Headless` was not in the first sketch. It runs the same `Game` code with no terminal, so tests, replays and AI agents can play a game and read back what it drew. It is the first step toward the headless `Sim` and bot play in phase 6.
 
+- **Phase 4, built:** `Screen::backdrop(_in)`, `Waves`, `Particles`, the pixel layer and the flagship `sail`.
+- **Phase 5, built:** the site is three pages (landing at `/`, art at `/art/`, games at `/games/`). `examples/web_games.rs` is a second WebAssembly module that drives `glow`, `sail` and `quickgame` through `Headless` (fixed 60 Hz steps from `tick(ms)`, key down and up, pointer). The games page has the gallery, touch buttons (left, right, up, down, enter, pause), the real source beside the game, a "make your own" section and a tuner. The tuner uses `game::Tuning`: a plain hook (`tuning.get(name, fallback)`) that games read, no interpreter. `check_site` loads all three pages in a headless browser. No person has looked at the pages in a real browser yet.
+
 Not done yet:
 
-- **Phase 4, art in games:** art backdrops in sub-regions (the region argument for `sketch_frame`), `Screen::backdrop`, `Particles`, and the flagship `sail`.
-- **Phase 5, the website:** the games page, `web_games`, the tuner and touch controls.
 - **Phase 6, multiplayer:** `Sim`, `Encode`/`Decode`, the `Local` and `Tcp` transports, lockstep and desync hashes.
 - **Real-terminal verification on Windows and macOS:** no person has run the games there yet, and `quickgame` has no pty test.
 - **Tuning the feel of `glow`:** the speeds, key timeouts and ripple strength are first guesses.

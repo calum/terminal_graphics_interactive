@@ -141,7 +141,7 @@ The pieces, all in `game::*`:
 - `Rng` is deterministic random numbers: `range_i32(lo, hi)`, `chance(p)`, `pick(&items)`.
 - `Timer` (`Timer::every(seconds)` or `Timer::once(seconds)`) is a cooldown and clocks in game seconds: `tick(ctx.dt)` returns true when one completes.
 - `Pool` (`Pool::with_capacity(n)`) is a fixed list of objects that never reallocates: `push(item)`, `retain`, `iter`.
-- `Hit` is a shape for collisions: `Hit::rect(x, y, w, h)` or `Hit::circle(x, y, r)`, then `hit.overlaps(&other)`.
+- `Hit` is a shape for collisions: `Hit::rect(x, y, w, h)` or `Hit::circle(x, y, r)`, then `hit.overlaps(&other)`. `Tuning` exposes numbers a tuner can change while the game runs: `Tuning::new().knob(name, label, default, min, max)`, read with `tuning.get(name, fallback)` (the website sliders use it).
 
 Rules that are easy to get wrong:
 
@@ -165,9 +165,9 @@ fn main() -> std::io::Result<()> {
     run(Title { score: None })
 }
 
-/// The title. After a round it shows the score instead.
-struct Title {
-    score: Option<u32>,
+/// The title (public so the website can start the game here). After a round it shows the score.
+pub struct Title {
+    pub score: Option<u32>,
 }
 
 impl Game for Title {
