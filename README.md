@@ -2,7 +2,7 @@
 
 Keyboard and mouse input for [`terminal_graphics`](https://github.com/calum/terminal_graphics_api), so you can build interactive terminal games, art, animations, screensavers, maths and physics demos, and drawing tools. One dependency (`terminal_graphics`, re-exported), almost no `unsafe`.
 
-**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, and a paint example. Next: `llms.txt`, more examples (a game, a screensaver), and terminal resize events.
+**Status: early (0.1).** Done: the input parser, raw terminal mode, `Terminal` (an interactive session with `poll(timeout)`, the window size and `draw`), mouse-to-cell mapping, a paint example, and [`llms.txt`](llms.txt) for AI coding agents. Next: more examples (a game, a screensaver) and terminal resize events.
 
 ## Try it
 
