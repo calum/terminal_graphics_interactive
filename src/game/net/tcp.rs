@@ -653,7 +653,7 @@ mod tests {
         }
         // wait until all ten messages (5 bytes each with the length) are buffered
         wait_for("all ten messages", || {
-            let _ = host.poll_fill_for_test();
+            host.poll_fill_for_test();
             let buffered = |p: usize| host.links[p].as_ref().unwrap().inbuf.unread().len();
             (buffered(1) >= 25 && buffered(2) >= 25).then_some(())
         });
