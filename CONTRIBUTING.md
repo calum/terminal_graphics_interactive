@@ -98,6 +98,8 @@ and friends from `game::*`. Start from [examples/glow.rs](examples/glow.rs), or
    in the [README](README.md), and in [llms.txt](llms.txt) if it teaches
    something new.
 
+Draw objects as coloured regions (`PixelArt`, `disc`, `glow`, `Particles`), not as text characters; keep text for the HUD and labels. A terminal cell is one column wide and about twice as tall, so a half-block pixel is the unit of a shape, and a `glow` is the unit of light.
+
 ## Add a game building block
 
 A building block is a small helper type in `src/game/`, such as `Timer` or

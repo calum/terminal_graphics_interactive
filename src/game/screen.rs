@@ -1,6 +1,6 @@
 //! The [`Screen`]: what a game draws on each frame.
 
-use super::Sprite;
+use super::{PixelArt, Sprite};
 use crate::art::sketch_region;
 use crate::{Cell, Palette, Pointer};
 use terminal_graphics::{Colour, Display, Pixel};
@@ -26,6 +26,10 @@ pub struct Screen {
     display: Display,
     time: f32,
     tick: u64,
+    // one entry per square pixel: two per cell row, allocated once in `new`
+    layer: Vec<Option<Colour>>,
+    layer_width: usize,
+    layer_height: usize,
 }
 
 impl Screen {
@@ -39,15 +43,21 @@ impl Screen {
     /// assert_eq!(screen.size(), (80, 24));
     /// ```
     pub fn new(width: u32, height: u32) -> Screen {
+        let layer_height = height as usize * 2;
+        let layer_width = width as usize;
         Screen {
             display: Display::new(width, height),
             time: 0.0,
             tick: 0,
+            layer: vec![None; layer_width.checked_mul(layer_height).unwrap_or(0)],
+            layer_width,
+            layer_height,
         }
     }
 
-    /// Fills the whole screen with spaces on `background`. Call it first in
-    /// `draw` when the background is plain colour.
+    /// Fills the whole screen with spaces on `background`, and throws away the
+    /// pixels drawn so far in this frame. Call it first in `draw` when the
+    /// background is plain colour.
     ///
     /// ```
     /// use terminal_graphics::Colour;
@@ -64,6 +74,7 @@ impl Screen {
                 self.display.set_pixel(x, y, ' ', Colour::Black, background);
             }
         }
+        self.layer.fill(None);
     }
 
     /// Fills the whole screen with a sketch formula, as the background of the
@@ -452,6 +463,255 @@ impl Screen {
         self.time = time;
         self.tick = tick;
     }
+
+    /// Sets the square pixel at `(x, y)` to `colour`. `x` is the column and
+    /// `y` the half row: pixel rows `0` and `1` are the top and bottom halves
+    /// of cell row `0`. Two pixels in one cell are drawn as one half block or
+    /// one solid cell by [`Screen::finish_frame`]. Positions off the screen are
+    /// ignored.
+    ///
+    /// Pixels are composited when the frame finishes, so they show above
+    /// everything drawn with `put`, `text`, `fill`, `sprite` or `backdrop` in
+    /// the same frame. `run` and [`Headless`] call `finish_frame` for you.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(3, 1);
+    /// screen.clear(Colour::Blue);
+    /// screen.pixel(1, 0, Colour::Red); // top half of cell (1, 0)
+    /// screen.pixel(1, 1, Colour::Red); // bottom half: both match, so a solid cell
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(1, 0).unwrap().background(), Colour::Red);
+    /// ```
+    pub fn pixel(&mut self, x: i32, y: i32, colour: Colour) {
+        if let Some(pixel) = self.layer_mut(i64::from(x), i64::from(y)) {
+            *pixel = Some(colour);
+        }
+    }
+
+    /// The layer entry for pixel `(x, y)`, or `None` when it is off the screen.
+    fn layer_mut(&mut self, x: i64, y: i64) -> Option<&mut Option<Colour>> {
+        if x < 0 || y < 0 || x >= self.layer_width as i64 || y >= self.layer_height as i64 {
+            return None;
+        }
+        let index = (y as usize)
+            .checked_mul(self.layer_width)?
+            .checked_add(x as usize)?;
+        self.layer.get_mut(index)
+    }
+
+    /// Fills a round disc of pixels: the pixels whose centres are within
+    /// `radius` of `(cx, cy)`. The centre is in pixel units, so `cy` counts
+    /// half rows (see [`Screen::pixel_height`]), and the radius is in
+    /// pixels too. Pixels are square, so a disc is round on screen.
+    ///
+    /// A radius that is not finite or not above zero draws nothing, and so
+    /// does a centre that is not finite. Parts off the screen are clipped.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(8, 4);
+    /// screen.clear(Colour::Black);
+    /// screen.disc(4.0, 4.0, 2.0, Colour::Yellow); // a ball in pixel units
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(4, 2).unwrap().background(), Colour::Yellow);
+    /// ```
+    pub fn disc(&mut self, cx: f32, cy: f32, radius: f32, colour: Colour) {
+        if !(cx.is_finite() && cy.is_finite() && radius.is_finite() && radius > 0.0) {
+            return;
+        }
+        let (x0, x1) = span(cx, radius, self.width());
+        let (y0, y1) = span(cy, radius, self.pixel_height());
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let dx = x as f32 + 0.5 - cx;
+                let dy = y as f32 + 0.5 - cy;
+                if dx * dx + dy * dy < radius * radius {
+                    if let Some(pixel) = self.layer_mut(i64::from(x), i64::from(y)) {
+                        *pixel = Some(colour);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A soft light centred on `(cx, cy)`, such as a lamp or a glowing player.
+    /// The centre is in pixel units (`cy` counts half rows) and so is the
+    /// radius. The light is drawn at once onto the cells already there, so it
+    /// blends into the background behind it: a solid core, then shade blocks
+    /// (`░ ▒ ▓`) that keep the background, fading out at the radius. The core
+    /// is the bright end of `palette`.
+    ///
+    /// It is drawn straight onto the cells, not composited, so text drawn after
+    /// it shows above it. A non-finite centre or radius, or a radius that is not
+    /// above zero, draws nothing.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(20, 10);
+    /// screen.clear(Colour::Black);
+    /// screen.glow(10.0, 10.0, 4.0, &Palette::fire());
+    /// assert_eq!(screen.display().pixel(10, 5).unwrap().character(), '\u{2593}');
+    /// assert_eq!(screen.display().pixel(0, 0).unwrap().background(), Colour::Black);
+    /// ```
+    pub fn glow(&mut self, cx: f32, cy: f32, radius: f32, palette: &Palette) {
+        if !(cx.is_finite() && cy.is_finite() && radius.is_finite() && radius > 0.0) {
+            return;
+        }
+        let colours = palette.colours();
+        let steps = colours.len() - 1;
+        let (x0, x1) = span(cx, radius, self.width());
+        let (y0, y1) = span(cy / 2.0, radius / 2.0, self.height());
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let dx = x as f32 + 0.5 - cx;
+                let dy = 2.0 * y as f32 + 1.0 - cy;
+                let reach = (1.0 - (dx * dx + dy * dy).sqrt() / radius).clamp(0.0, 1.0);
+                let intensity = reach * reach;
+                if intensity < 0.08 {
+                    continue;
+                }
+                let colour = colours[((intensity * steps as f32).round() as usize).min(steps)];
+                let glyph = if intensity < 0.25 {
+                    Some('\u{2591}')
+                } else if intensity < 0.5 {
+                    Some('\u{2592}')
+                } else if intensity < 0.75 {
+                    Some('\u{2593}')
+                } else {
+                    None
+                };
+                if let Some(pixel) = self.display.pixel_mut(x as isize, y as isize) {
+                    match glyph {
+                        Some(shade) => {
+                            pixel.set_character(shade);
+                            pixel.set_colour(colour);
+                        }
+                        None => {
+                            pixel.set_character(' ');
+                            pixel.set_background(colour);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draws a [`PixelArt`] with its top left pixel at `(x, y)` in pixel units
+    /// (see [`Screen::pixel`]). Transparent pixels leave the layer as it is.
+    /// The part off the screen is clipped.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(6, 2);
+    /// screen.clear(Colour::Blue);
+    /// let dot = PixelArt::new("W", &[('W', Colour::White)]);
+    /// screen.pixel_art(2, 3, &dot); // pixel row 3 is the bottom half of cell row 1
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(2, 1).unwrap().character(), '\u{2584}');
+    /// ```
+    pub fn pixel_art(&mut self, x: i32, y: i32, art: &PixelArt) {
+        let (x, y) = (i64::from(x), i64::from(y));
+        for row in 0..art.height() {
+            for column in 0..art.width() {
+                if let Some(colour) = art.pixel(column, row) {
+                    let (px, py) = (
+                        x.saturating_add(i64::try_from(column).unwrap_or(i64::MAX)),
+                        y.saturating_add(i64::try_from(row).unwrap_or(i64::MAX)),
+                    );
+                    if let Some(pixel) = self.layer_mut(px, py) {
+                        *pixel = Some(colour);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The height in square pixels: two for each row, so `pixel_height` is
+    /// twice [`Screen::height`].
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let screen = Screen::new(10, 4);
+    /// assert_eq!(screen.pixel_height(), 8);
+    /// ```
+    pub fn pixel_height(&self) -> i32 {
+        to_i32(self.layer_height as u32)
+    }
+
+    /// Composites the pixel layer onto the screen. Call it once a frame, after
+    /// everything is drawn; `run` and [`Headless`] do this for you.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(1, 1);
+    /// screen.clear(Colour::Blue);
+    /// screen.pixel(0, 0, Colour::Red);
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(0, 0).unwrap().character(), '\u{2580}');
+    /// ```
+    pub fn finish_frame(&mut self) {
+        let (width, height) = self.size();
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let top = self.layer_at(column, 2 * row);
+                let bottom = self.layer_at(column, 2 * row + 1);
+                let Some(pixel) = self.display.pixel_mut(column as isize, row as isize) else {
+                    continue;
+                };
+                match (top, bottom) {
+                    (None, None) => {}
+                    (Some(a), Some(b)) if a == b => {
+                        pixel.set_character(' ');
+                        pixel.set_background(a);
+                    }
+                    (Some(a), Some(b)) => {
+                        pixel.set_character('\u{2580}');
+                        pixel.set_colour(a);
+                        pixel.set_background(b);
+                    }
+                    (Some(a), None) => {
+                        pixel.set_character('\u{2580}');
+                        pixel.set_colour(a);
+                    }
+                    (None, Some(b)) => {
+                        pixel.set_character('\u{2584}');
+                        pixel.set_colour(b);
+                    }
+                }
+            }
+        }
+        self.layer.fill(None);
+    }
+
+    /// The colour of layer pixel `(column, y)` for compositing; `None` when
+    /// nothing is drawn there.
+    fn layer_at(&self, column: usize, y: usize) -> Option<Colour> {
+        self.layer
+            .get(y * self.layer_width + column)
+            .copied()
+            .flatten()
+    }
+}
+
+/// The range `lo..hi` of whole numbers from `centre - radius` to `centre +
+/// radius`, cut down to `0..limit`. The centre and radius must be finite.
+fn span(centre: f32, radius: f32, limit: i32) -> (i32, i32) {
+    let top = limit as f32;
+    let lo = (centre - radius).floor().clamp(0.0, top) as i32;
+    let hi = ((centre + radius).ceil() + 1.0).clamp(0.0, top) as i32;
+    (lo, hi)
 }
 
 /// A size as an `i32` for drawing arithmetic. Terminals are nowhere near
@@ -463,6 +723,327 @@ fn to_i32(n: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_top_half_pixel_draws_an_upper_half_block_on_the_existing_background() {
+        let mut screen = Screen::new(2, 1);
+        screen.clear(Colour::Blue);
+        screen.pixel(0, 0, Colour::Red);
+        screen.finish_frame();
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour(), cell.background()),
+            ('\u{2580}', Colour::Red, Colour::Blue)
+        );
+    }
+
+    #[test]
+    fn a_bottom_half_pixel_draws_a_lower_half_block_on_the_existing_background() {
+        let mut screen = Screen::new(2, 1);
+        screen.clear(Colour::Blue);
+        screen.pixel(0, 1, Colour::Green);
+        screen.finish_frame();
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour(), cell.background()),
+            ('\u{2584}', Colour::Green, Colour::Blue)
+        );
+    }
+
+    #[test]
+    fn two_different_pixels_in_one_cell_draw_one_half_block_with_both_colours() {
+        let mut screen = Screen::new(1, 1);
+        screen.clear(Colour::White);
+        screen.pixel(0, 0, Colour::Red);
+        screen.pixel(0, 1, Colour::Blue);
+        screen.finish_frame();
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour(), cell.background()),
+            ('\u{2580}', Colour::Red, Colour::Blue)
+        );
+    }
+
+    #[test]
+    fn two_equal_pixels_in_one_cell_draw_a_space_on_that_colour_and_keep_the_foreground() {
+        let mut screen = Screen::new(1, 1);
+        screen.clear(Colour::White);
+        screen.put(0, 0, 'x', Colour::Yellow);
+        screen.pixel(0, 0, Colour::Red);
+        screen.pixel(0, 1, Colour::Red);
+        screen.finish_frame();
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour(), cell.background()),
+            (' ', Colour::Yellow, Colour::Red)
+        );
+    }
+
+    #[test]
+    fn pixels_off_every_edge_of_the_screen_are_clipped_and_never_wrap_round() {
+        let mut screen = Screen::new(2, 1);
+        screen.clear(Colour::Blue);
+        let outside = [
+            (-1, 0),
+            (2, 0),
+            (0, -1),
+            (0, 2),
+            (-1, 1),
+            (2, 1),
+            (1, -1),
+            (i32::MIN, 0),
+            (i32::MAX, 0),
+            (0, i32::MIN),
+            (0, i32::MAX),
+            (i32::MIN, i32::MIN),
+            (i32::MAX, i32::MAX),
+            (i32::MIN, i32::MAX),
+            (i32::MAX, i32::MIN),
+        ];
+        for (x, y) in outside {
+            screen.pixel(x, y, Colour::Red);
+        }
+        screen.finish_frame();
+        assert_eq!(screen.display().render().matches('\u{2580}').count(), 0);
+        assert_eq!(screen.display().render().matches('\u{2584}').count(), 0);
+        for x in 0..2 {
+            assert_eq!(
+                screen.display().pixel(x, 0).unwrap().background(),
+                Colour::Blue
+            );
+        }
+    }
+
+    #[test]
+    fn clear_throws_away_the_pixels_drawn_so_far() {
+        let mut screen = Screen::new(1, 1);
+        screen.pixel(0, 0, Colour::Red);
+        screen.clear(Colour::Blue);
+        screen.finish_frame();
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!((cell.character(), cell.background()), (' ', Colour::Blue));
+    }
+
+    #[test]
+    fn a_second_finish_frame_changes_nothing() {
+        let mut screen = Screen::new(2, 1);
+        screen.clear(Colour::Blue);
+        screen.pixel(0, 0, Colour::Red);
+        screen.finish_frame();
+        screen.put(0, 0, 'x', Colour::Yellow);
+        screen.finish_frame();
+        assert_eq!(screen.display().pixel(0, 0).unwrap().character(), 'x');
+    }
+
+    #[test]
+    fn the_pixel_height_is_twice_the_rows() {
+        let screen = Screen::new(5, 3);
+        assert_eq!(screen.pixel_height(), 6);
+    }
+
+    /// Whether the layer has a pixel at `(x, y)`, for the tests of the layer.
+    fn lit(screen: &Screen, x: i32, y: i32) -> bool {
+        screen.layer[y as usize * screen.layer_width + x as usize].is_some()
+    }
+
+    #[test]
+    fn a_disc_lights_the_pixels_whose_centres_are_within_its_radius() {
+        let mut screen = Screen::new(20, 10);
+        screen.disc(10.0, 10.0, 3.0, Colour::Red);
+        assert!(lit(&screen, 10, 10), "the centre is lit");
+        assert!(lit(&screen, 12, 10), "a pixel 2.5 away is lit");
+        assert!(!lit(&screen, 13, 10), "a pixel 3.5 away is not");
+        assert!(!lit(&screen, 10, 14), "a pixel 3.5 rows away is not");
+    }
+
+    /// How many pixels of the layer are lit.
+    fn lit_count(screen: &Screen) -> usize {
+        screen.layer.iter().filter(|p| p.is_some()).count()
+    }
+
+    #[test]
+    fn a_disc_is_round_so_its_area_is_close_to_pi_times_the_radius_squared() {
+        let mut screen = Screen::new(40, 20);
+        screen.disc(20.0, 20.0, 5.0, Colour::Red);
+        let area = std::f32::consts::PI * 25.0;
+        let count = lit_count(&screen) as f32;
+        assert!(
+            (count - area).abs() < area * 0.05,
+            "a radius 5 disc lit {count} pixels, expected about {area}"
+        );
+    }
+
+    #[test]
+    fn a_huge_or_off_screen_disc_is_clipped_to_the_screen() {
+        let mut screen = Screen::new(3, 1);
+        screen.disc(0.0, 0.0, 1.0e30, Colour::Red);
+        assert_eq!(lit_count(&screen), 6, "every pixel of a 3 by 1 screen");
+
+        let mut edge = Screen::new(3, 1);
+        edge.disc(-1.0, 1.0, 2.5, Colour::Red);
+        assert!(
+            lit(&edge, 0, 0) && lit(&edge, 0, 1),
+            "the part on screen is lit"
+        );
+        assert!(!lit(&edge, 2, 1), "the far side is not");
+        edge.disc(f32::MAX, f32::MAX, f32::MAX, Colour::Red); // must not panic or loop
+    }
+
+    #[test]
+    fn a_disc_with_a_nan_negative_or_zero_radius_or_a_bad_centre_draws_nothing() {
+        let mut screen = Screen::new(10, 10);
+        screen.disc(5.0, 5.0, f32::NAN, Colour::Red);
+        screen.disc(5.0, 5.0, -3.0, Colour::Red);
+        screen.disc(5.0, 5.0, 0.0, Colour::Red);
+        screen.disc(5.0, 5.0, f32::INFINITY, Colour::Red);
+        screen.disc(f32::NAN, 5.0, 2.0, Colour::Red);
+        screen.disc(5.0, f32::NEG_INFINITY, 2.0, Colour::Red);
+        assert_eq!(lit_count(&screen), 0);
+    }
+
+    #[test]
+    fn pixel_art_is_drawn_from_its_top_left_pixel_and_clipped_at_the_edge() {
+        let mut screen = Screen::new(2, 1);
+        let art = PixelArt::new("RB\nBR", &[('R', Colour::Red), ('B', Colour::Blue)]);
+        screen.pixel_art(-1, 0, &art);
+        // the art's column 1 lands on screen column 0; its column 0 is off screen
+        assert_eq!(screen.layer[0], Some(Colour::Blue));
+        assert_eq!(screen.layer[2], Some(Colour::Red));
+        assert_eq!(lit_count(&screen), 2);
+    }
+
+    /// The colour a cell shows as light: its background when it is a solid
+    /// block, otherwise its foreground.
+    fn light_of(screen: &Screen, x: i32, y: i32) -> Colour {
+        let cell = screen.display().pixel(x as isize, y as isize).unwrap();
+        if cell.character() == ' ' {
+            cell.background()
+        } else {
+            cell.colour()
+        }
+    }
+
+    #[test]
+    fn a_glow_is_brighter_at_its_centre_than_at_its_edge() {
+        let palette = Palette::fire();
+        let rank = |colour: Colour| palette.colours().iter().position(|c| *c == colour);
+        let mut screen = Screen::new(40, 20);
+        screen.clear(Colour::Black);
+        screen.glow(20.0, 20.0, 12.0, &palette);
+        let centre = rank(light_of(&screen, 20, 10)).unwrap();
+        let edge = rank(light_of(&screen, 27, 10)).unwrap();
+        assert!(
+            centre > edge,
+            "centre {centre} should be brighter than edge {edge}"
+        );
+    }
+
+    #[test]
+    fn a_glow_softens_into_shade_blocks_that_keep_the_background_behind_them() {
+        let mut screen = Screen::new(40, 20);
+        screen.clear(Colour::Blue);
+        screen.glow(20.0, 20.0, 12.0, &Palette::fire());
+        // intensities are about 0.14, 0.38 and 0.72 at these cells
+        let shown = |x, y| {
+            let cell = screen.display().pixel(x, y).unwrap();
+            (cell.character(), cell.colour(), cell.background())
+        };
+        assert_eq!(shown(27, 10), ('\u{2591}', Colour::Red, Colour::Blue));
+        assert_eq!(shown(24, 10), ('\u{2592}', Colour::BrightRed, Colour::Blue));
+        assert_eq!(
+            shown(21, 10),
+            ('\u{2593}', Colour::BrightYellow, Colour::Blue)
+        );
+    }
+
+    #[test]
+    fn a_glow_does_not_touch_a_cell_beyond_its_radius() {
+        let mut screen = Screen::new(40, 20);
+        screen.clear(Colour::Blue);
+        screen.glow(20.0, 20.0, 12.0, &Palette::fire());
+        for (x, y) in [(34, 10), (20, 0), (0, 0), (39, 19)] {
+            let cell = screen.display().pixel(x, y).unwrap();
+            assert_eq!(
+                (cell.character(), cell.background()),
+                (' ', Colour::Blue),
+                "cell ({x}, {y}) is outside the glow"
+            );
+        }
+    }
+
+    #[test]
+    fn a_glow_is_clipped_at_the_edges_and_bad_values_draw_nothing() {
+        let palette = Palette::fire();
+        let mut edge = Screen::new(10, 4);
+        edge.clear(Colour::Blue);
+        edge.glow(0.0, 0.0, 6.0, &palette); // centred on the top left corner
+        assert_eq!(edge.display().pixel(0, 0).unwrap().character(), '\u{2593}');
+        edge.glow(-1.0e30, 1.0e30, 1.0e30, &palette); // huge and off screen: no panic, no hang
+
+        let mut bad = Screen::new(10, 4);
+        bad.clear(Colour::Blue);
+        let before = bad.clone();
+        bad.glow(f32::NAN, 2.0, 4.0, &palette);
+        bad.glow(5.0, f32::INFINITY, 4.0, &palette);
+        bad.glow(5.0, 2.0, f32::NAN, &palette);
+        bad.glow(5.0, 2.0, 0.0, &palette);
+        bad.glow(5.0, 2.0, -4.0, &palette);
+        assert_eq!(bad.display().render(), before.display().render());
+    }
+
+    #[test]
+    fn two_hundred_random_shapes_drawn_and_finished_never_panic() {
+        use crate::game::Rng;
+        let mut rng = Rng::new(2026);
+        let mut screen = Screen::new(7, 3);
+        let palette = Palette::fire();
+        let art = PixelArt::new(
+            "RB.\n.GG",
+            &[
+                ('R', Colour::Red),
+                ('B', Colour::Blue),
+                ('G', Colour::Green),
+            ],
+        );
+        let colours = [Colour::Red, Colour::Blue, Colour::Yellow, Colour::White];
+        // a number that is usually ordinary but is sometimes NaN, infinite or extreme
+        let number = |rng: &mut Rng| -> f32 {
+            match rng.range_i32(0, 8) {
+                0 => f32::NAN,
+                1 => f32::INFINITY,
+                2 => f32::MIN,
+                3 => f32::MAX,
+                4 => 0.0,
+                _ => rng.range_f32(-40.0, 40.0),
+            }
+        };
+        let position = |rng: &mut Rng| -> i32 {
+            match rng.range_i32(0, 6) {
+                0 => i32::MIN,
+                1 => i32::MAX,
+                _ => rng.range_i32(-30, 30),
+            }
+        };
+        for _ in 0..200 {
+            let colour = colours[rng.range_i32(0, colours.len() as i32) as usize];
+            match rng.range_i32(0, 4) {
+                0 => screen.pixel(position(&mut rng), position(&mut rng), colour),
+                1 => {
+                    let (cx, cy, r) = (number(&mut rng), number(&mut rng), number(&mut rng));
+                    screen.disc(cx, cy, r, colour);
+                }
+                2 => {
+                    let (cx, cy, r) = (number(&mut rng), number(&mut rng), number(&mut rng));
+                    screen.glow(cx, cy, r, &palette);
+                }
+                _ => screen.pixel_art(position(&mut rng), position(&mut rng), &art),
+            }
+            if rng.chance(0.5) {
+                screen.finish_frame();
+            }
+        }
+        screen.finish_frame();
+    }
 
     #[test]
     fn the_game_loop_sets_the_clock_and_drawing_code_reads_it() {

@@ -135,7 +135,7 @@ The pieces, all in `game::*`:
 - `Game` is a trait with `update(&mut self, ctx) -> Next` and `draw(&self, screen)`: one screen of your game. `Next` says what happens next: `Next::stay()`, `Next::switch(game)`, `Next::push(game)` (pause on top), `Next::pop()` or `Next::quit()`.
 - `Context` (the `ctx` argument) holds `ctx.keys`, `ctx.pointer`, `ctx.dt`, `ctx.tick`, `ctx.size`, `ctx.seed` and `ctx.time()`.
 - `run` plays a game in the terminal. `Headless` plays it without a terminal, for tests: `Headless::new(game).size(40, 12)`, then `tap(code)` presses and releases a key. `step` runs updates (`step(60)` is one second) and `text` returns what was drawn, row by row. Its rustdoc has more examples.
-- `Screen` draws: `clear`, `text(x, y, ...)`, `text_centred(y, ...)`, `put(x, y, ch, colour)`, plus `fill`, `bar` and `sprite`. `Sprite` (`Sprite::new(art, colour)`) makes a picture from a string.
+- `Screen` draws: `clear`, `text(x, y, ...)`, `text_centred(y, ...)`, `put(x, y, ch, colour)`, plus `fill`, `bar` and `sprite`. `Sprite` (`Sprite::new(art, colour)`) makes a picture from a string. `PixelArt` (`PixelArt::new(art, &[('R', Colour::Red)])`) is a picture in square pixels, drawn with `screen.pixel_art(x, y, &art)`, and `screen.disc` and `screen.glow` light round shapes the same way.
 - `Keys` (`ctx.keys`): `held(KeyCode::Left)`, `pressed(KeyCode::Enter)`, `released(...)`, and `axis(KeyCode::Left, KeyCode::Right)` gives -1, 0 or 1.
 - `Controls` names actions that players can rebind: `Controls::new().bind(action, &[keys])`, then `held(&ctx.keys, action)`.
 - `Rng` is deterministic random numbers: `range_i32(lo, hi)`, `chance(p)`, `pick(&items)`.
@@ -148,7 +148,7 @@ Rules that are easy to get wrong:
 - `Ctrl+C` always quits. `q` and Esc belong to the game, so the game decides what they do.
 - `update` runs 60 times a second and `ctx.dt` is constant (1/60). Never read the wall clock; use `ctx.time()`.
 - `draw` takes `&self`, so it cannot change the game. Change state in `update` only.
-- Terminal cells are about twice as tall as wide, so move in rows at about half the speed of columns.
+- Terminal cells are about twice as tall as wide, so move in rows at about half the speed of columns. Game objects are coloured regions, not text: draw them with `PixelArt`, `disc`, `glow` or `Particles`, and keep `text` for the HUD and labels.
 - Where the terminal cannot report key release, `Keys::held` is emulated by timing: a press counts as held for 300 ms and each repeat extends it. The kitty keyboard protocol gives real releases.
 - Use `Rng::new(ctx.seed)` once, in your first scene, and never `std::time` or `thread_rng`, so a run replays exactly.
 - A `Pool` never grows: push returns the item back when it is full, so decide what to do with it.

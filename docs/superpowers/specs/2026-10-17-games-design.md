@@ -8,6 +8,8 @@ Phases 1 to 3 are built. Phase 4 onward is not.
 - **Phase 2, built:** key release events from the kitty keyboard protocol, `Keys` (held, pressed and released; timed where the terminal sends no releases) and `Controls` (named actions that can be rebound).
 - **Phase 3, built:** the core game API (`Game`, `Next`, `Context`, `Screen`, `Sprite`, `Rng`, `Timer`, `Pool`, `Hit`), `run`, the `glow` and `quickgame` examples, and the games section of `llms.txt`.
 
+**The pixel layer (added with phase 4).** A `Screen` has a second layer of square pixels, two per cell row, so a cell can show two of them with `▀` or `▄` (or one solid cell when they match). `Screen::pixel`, `disc` and `pixel_art` (a `PixelArt`, a picture in pixels made from text and a legend) draw into that layer, and `finish_frame` composites it when the frame ends, so pixels show above text in the same frame. `Particles` draw as pixels. `glow` is different: it blends a soft light straight into the cells behind it, with shade blocks (`░ ▒ ▓`) that keep the background. The rule for the games section: objects are coloured regions (`PixelArt`, `disc`, `glow`, `Particles`), not text characters; text is for the HUD and labels.
+
 `Headless` was not in the first sketch. It runs the same `Game` code with no terminal, so tests, replays and AI agents can play a game and read back what it drew. It is the first step toward the headless `Sim` and bot play in phase 6.
 
 Not done yet:

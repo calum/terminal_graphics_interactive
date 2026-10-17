@@ -112,6 +112,18 @@ fn the_game_example_recipe_covers_the_test_entry_and_the_follow_up_files() {
 }
 
 #[test]
+fn the_game_example_recipe_says_to_draw_objects_as_coloured_regions() {
+    let text = contributing();
+    let recipe = section(&text, "## Add a game example");
+    let rule = "Draw objects as coloured regions (`PixelArt`, `disc`, `glow`, `Particles`), \
+                not as text characters; keep text for the HUD and labels.";
+    assert!(
+        recipe.contains(rule),
+        "the game example recipe lacks the colour rule {rule:?}"
+    );
+}
+
+#[test]
 fn the_game_building_block_recipe_says_what_a_block_must_be() {
     let text = contributing();
     let recipe = section(&text, "## Add a game building block");

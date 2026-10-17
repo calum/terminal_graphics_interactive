@@ -280,7 +280,7 @@ fn names_every_public_game_type_in_code_style() {
     let section = games_section();
     for name in [
         "Game", "Next", "Context", "Headless", "run", "Keys", "Controls", "Screen", "Sprite",
-        "Rng", "Timer", "Pool", "Hit",
+        "Rng", "Timer", "Pool", "Hit", "PixelArt",
     ] {
         assert!(
             section.contains(&format!("`{name}`")),
@@ -419,6 +419,16 @@ fn lists_the_game_rules_that_are_easy_to_get_wrong() {
             "the games section does not warn about {rule:?}"
         );
     }
+}
+
+#[test]
+fn says_that_objects_are_coloured_regions_not_text() {
+    let section = games_section();
+    let rule = "objects are coloured regions, not text";
+    assert!(
+        section.contains(rule),
+        "the games section does not say {rule:?}"
+    );
 }
 
 #[test]

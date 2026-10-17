@@ -85,9 +85,10 @@ impl Particles {
         self
     }
 
-    /// Paints every particle on `screen`. A newborn particle uses the bright
-    /// end of the palette and a dying one the dark end. Particles off the
-    /// screen are clipped, so nothing panics.
+    /// Paints every particle on `screen` as one coloured pixel, so a spark is
+    /// half a cell tall. A newborn particle uses the bright end of the palette
+    /// and a dying one the dark end. Particles off the screen are clipped, so
+    /// nothing panics. The pixels appear once the frame is finished.
     ///
     /// ```
     /// use terminal_graphics_interactive::game::*;
@@ -96,13 +97,21 @@ impl Particles {
     /// spark.emit(2.0, 0.0, 0.0, 0.0, 1.0);
     /// let mut screen = Screen::new(4, 1);
     /// spark.draw(&mut screen);
-    /// assert_ne!(screen.display().pixel(2, 0).unwrap().character(), ' ');
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(2, 0).unwrap().character(), '\u{2580}');
     /// ```
     pub fn draw(&self, screen: &mut Screen) {
+        let colours = self.palette.colours();
+        let steps = colours.len() - 1;
         for p in self.live.iter() {
-            let fade = 1.0 - p.age / p.life;
-            let (ch, fg, _bg) = self.palette.shade(fade);
-            screen.put(p.x.round() as i32, p.y.round() as i32, ch, fg);
+            let fade = (1.0 - p.age / p.life).clamp(0.0, 1.0);
+            let index = ((fade * steps as f32).round() as usize).min(steps);
+            // a pixel is half a cell row, so the row is doubled
+            screen.pixel(
+                p.x.round() as i32,
+                (p.y * 2.0).round() as i32,
+                colours[index],
+            );
         }
     }
 
@@ -365,6 +374,22 @@ mod tests {
     }
 
     #[test]
+    fn a_particle_is_one_pixel_at_half_row_precision() {
+        let mut particles = Particles::new(4);
+        particles.emit(2.0, 1.0, 0.0, 0.0, 1.0);
+        let mut screen = Screen::new(4, 2);
+        screen.clear(Colour::Blue);
+        particles.draw(&mut screen);
+        screen.finish_frame();
+        // row 1.0 is pixel row 2, the top half of cell row 1
+        let cell = screen.display().pixel(2, 1).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour(), cell.background()),
+            ('\u{2580}', Colour::BrightWhite, Colour::Blue)
+        );
+    }
+
+    #[test]
     fn a_newborn_particle_is_drawn_bright_and_a_dying_one_dim() {
         let mut particles =
             Particles::new(8).palette(Palette::new(&[Colour::Black, Colour::White]));
@@ -374,13 +399,18 @@ mod tests {
 
         let mut screen = Screen::new(5, 1);
         particles.draw(&mut screen);
-        let dying = screen.display().pixel(1, 0).unwrap().character();
-        let newborn = screen.display().pixel(3, 0).unwrap().character();
-        assert_eq!(newborn, '█', "a new particle is the brightest block");
-        assert_eq!(dying, ' ', "an old particle has faded to the dimmest");
+        screen.finish_frame();
+        let dying = screen.display().pixel(1, 0).unwrap().colour();
+        let newborn = screen.display().pixel(3, 0).unwrap().colour();
         assert_eq!(
-            screen.display().pixel(3, 0).unwrap().colour(),
-            Colour::White
+            newborn,
+            Colour::White,
+            "a new particle is the brightest colour"
+        );
+        assert_eq!(
+            dying,
+            Colour::Black,
+            "an old particle has faded to the dimmest"
         );
     }
 
@@ -458,6 +488,7 @@ mod tests {
         particles.step(0.0);
         let mut screen = Screen::new(4, 1);
         particles.draw(&mut screen);
+        screen.finish_frame();
         for x in 0..4 {
             assert_eq!(screen.display().pixel(x, 0).unwrap().character(), ' ');
         }

@@ -236,12 +236,14 @@ impl Scenes {
     }
 
     /// Draws every scene, bottom to top, so a pause screen pushed over the
-    /// game is drawn on top of it.
+    /// game is drawn on top of it. Then finishes the frame, so the pixels
+    /// drawn by any scene show above the text and the sprites of all of them.
     pub(crate) fn draw(&self, screen: &mut Screen, tick: u64) {
         screen.set_clock(tick as f32 * DT, tick);
         for scene in &self.stack {
             scene.draw(screen);
         }
+        screen.finish_frame();
     }
 
     /// Runs one update of the top scene and applies what it returns.
@@ -287,6 +289,7 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use terminal_graphics::Colour;
 
     type Log = Rc<RefCell<Vec<&'static str>>>;
 
@@ -318,6 +321,30 @@ mod tests {
 
     fn take(log: &Log) -> Vec<&'static str> {
         std::mem::take(&mut *log.borrow_mut())
+    }
+
+    #[test]
+    fn the_frame_is_finished_after_every_scene_draws_so_pixels_show_above_text() {
+        struct Floor;
+        impl Game for Floor {
+            fn draw(&self, screen: &mut Screen) {
+                screen.pixel(0, 0, Colour::Red);
+            }
+        }
+        struct Words;
+        impl Game for Words {
+            fn draw(&self, screen: &mut Screen) {
+                screen.text(0, 0, "xy", Colour::White);
+            }
+        }
+        let mut scenes = Scenes::new(Box::new(Floor));
+        scenes.apply(Next::push(Words));
+        let mut screen = Screen::new(2, 1);
+        screen.clear(Colour::Blue);
+        scenes.draw(&mut screen, 0);
+        let cell = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(cell.character(), '\u{2580}', "the pixel is above the text");
+        assert_eq!(screen.display().pixel(1, 0).unwrap().character(), 'y');
     }
 
     #[test]
