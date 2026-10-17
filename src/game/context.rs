@@ -1,10 +1,10 @@
 //! The [`Context`]: what a game's `update` is given each step.
 
 use super::Keys;
-use crate::Pointer;
+use super::PlayerId;
 #[cfg(test)]
 use super::{Game, Headless, Next};
-use super::PlayerId;
+use crate::Pointer;
 
 /// Everything an update needs, and nothing it should own.
 ///

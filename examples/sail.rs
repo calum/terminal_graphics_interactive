@@ -3067,6 +3067,48 @@ mod tests {
         out
     }
 
+    /// A fingerprint of every cell on the screen: character and both colours.
+    fn fingerprint(game: &mut Headless) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for cell in cells(game) {
+            for byte in format!("{cell:?}").bytes() {
+                hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        hash
+    }
+
+    #[test]
+    fn a_scripted_round_draws_the_same_frames_as_when_it_was_recorded() {
+        // A guard for refactoring the rules: the frames of a seeded round with
+        // scripted keys. If this changes, so did how the game plays or looks.
+        let mut game = Headless::new(Title::new(0)).seed(3).size(80, 24);
+        game.tap(KeyCode::Enter);
+        let mut seen = Vec::new();
+        for tick in 0..1800 {
+            match tick % 100 {
+                0 => game.press(KeyCode::Right),
+                40 => game.release(KeyCode::Right),
+                50 => game.press(KeyCode::Left),
+                80 => game.release(KeyCode::Left),
+                _ => {}
+            }
+            game.step(1);
+            if tick % 450 == 449 {
+                seen.push(fingerprint(&mut game));
+            }
+        }
+        assert_eq!(
+            seen,
+            [
+                224780072967576524,
+                11642410558734743304,
+                2261116509746972382,
+                1957015234349892516
+            ]
+        );
+    }
+
     #[test]
     fn the_tuning_has_the_three_knobs_at_their_defaults() {
         let knobs = tuning().knobs();
