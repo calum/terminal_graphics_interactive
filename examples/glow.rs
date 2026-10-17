@@ -18,13 +18,42 @@ const ROUND_SECONDS: f32 = 45.0;
 const SPEED: f32 = 24.0;
 /// How hard a held mouse button pulls the light, in columns a second.
 const PULL: f32 = 20.0;
+/// The highest the light may go (see `steer`): below the HUD strip on row 0.
+const TOP_ROW: f32 = 2.0;
 /// How quickly the velocity eases toward what the keys and pointer ask for.
 const EASE: f32 = 4.0;
+
+/// The light is a disc of `ORB_RADIUS` pixels with a soft halo of `HALO_RADIUS`
+/// pixels, which breathes by a tenth of its size. A mote is a smaller disc,
+/// `MOTE_DISC` pixels, with a warm halo of `MOTE_HALO` pixels that twinkles.
+/// Pixels are square, so these are round on screen (see `Screen::disc`).
+const ORB_RADIUS: f32 = 2.5;
+const HALO_RADIUS: f32 = 8.0;
+const MOTE_DISC: f32 = 1.6;
+const MOTE_HALO: f32 = 6.0;
+
+/// The colours of a collect burst, dark to bright.
+fn ember_palette() -> Palette {
+    use Colour::*;
+    Palette::new(&[Yellow, BrightYellow, BrightWhite])
+}
+
+/// The warm colours of a mote's halo, dark to bright.
+fn mote_palette() -> Palette {
+    use Colour::*;
+    Palette::new(&[Yellow, BrightYellow])
+}
 
 /// The most motes, rings and sparks at once. The pools never grow past these.
 const MOTE_LIMIT: usize = 24;
 const PULSE_LIMIT: usize = 8;
 const SPARK_LIMIT: usize = 160;
+/// The sparks of a collect burst: how many can be alive, how many a touch
+/// makes, how fast they fly (cells a second) and how long they last.
+const EMBER_LIMIT: usize = 200;
+const EMBER_COUNT: usize = 14;
+const EMBER_SPEED: f32 = 12.0;
+const EMBER_LIFE: f32 = 0.6;
 /// How long a ring rolls, and how long a spark glows, in seconds.
 const PULSE_LIFE: f32 = 1.6;
 const SPARK_LIFE: f32 = 0.6;
@@ -33,6 +62,31 @@ const SPARK_LIFE: f32 = 0.6;
 const RING_SPEED: f32 = 14.0;
 const LIGHT_RADIUS: f32 = 1.2;
 const MOTE_RADIUS: f32 = 1.0;
+
+/// The colour of a trail spark with `fade` of its life left (1.0 newborn, 0.0
+/// spent): it steps down the palette, from bright to dark, as it ages.
+fn fade_colour(palette: &Palette, fade: f32) -> Colour {
+    let colours = palette.colours();
+    let steps = colours.len() - 1;
+    let fade = if fade.is_nan() {
+        0.0
+    } else {
+        fade.clamp(0.0, 1.0)
+    };
+    colours[((fade * steps as f32).round() as usize).min(steps)]
+}
+
+/// The colours of the light's halo, dark to bright.
+fn light_palette() -> Palette {
+    use Colour::*;
+    Palette::new(&[Cyan, BrightCyan, BrightWhite])
+}
+
+/// The colours of the trail, from newborn (last) to spent (first).
+fn trail_palette() -> Palette {
+    use Colour::*;
+    Palette::new(&[Blue, Cyan, BrightCyan, BrightWhite])
+}
 
 /// What the keys can ask for during play.
 #[derive(Clone, Copy, PartialEq)]
@@ -79,9 +133,10 @@ struct Spark {
     life: f32,
 }
 
-/// The cell a position falls in.
-fn cell(v: f32) -> i32 {
-    v.round() as i32
+/// The middle of the cell at `(x, y)`, in pixel units: a cell is one column
+/// wide and two pixel rows tall, and a pixel's centre is half a unit in.
+fn centre(x: f32, y: f32) -> (f32, f32) {
+    (x + 0.5, 2.0 * y + 1.0)
 }
 
 /// A circle at cell `(x, y)` in square units. A column is half as wide as a
@@ -152,10 +207,17 @@ struct Play {
     motes: Pool<Mote>,
     pulses: Pool<Pulse>,
     sparks: Pool<Spark>,
+    /// The sparks of a collect burst.
+    embers: Particles,
     spawn: Timer,
     clock: Timer,
     rng: Rng,
     controls: Controls<Action>,
+    /// The palettes of the light's halo, the trail and the motes' halos, built
+    /// once rather than per frame.
+    light_glow: Palette,
+    trail: Palette,
+    mote_glow: Palette,
 }
 
 impl Play {
@@ -166,10 +228,14 @@ impl Play {
             motes: Pool::with_capacity(MOTE_LIMIT),
             pulses: Pool::with_capacity(PULSE_LIMIT),
             sparks: Pool::with_capacity(SPARK_LIMIT),
+            embers: Particles::new(EMBER_LIMIT).palette(ember_palette()),
             spawn: Timer::every(0.5),
             clock: Timer::once(ROUND_SECONDS),
             rng: Rng::new(seed),
             controls: controls(),
+            light_glow: light_palette(),
+            trail: trail_palette(),
+            mote_glow: mote_palette(),
         }
     }
 
@@ -190,7 +256,9 @@ impl Play {
         // min then max, not clamp: clamp panics when the screen is empty
         let (right, bottom) = (ctx.size.0 as f32 - 1.0, ctx.size.1 as f32 - 1.0);
         light.x = (light.x + light.vx * ctx.dt).min(right).max(0.0);
-        light.y = (light.y + light.vy * ctx.dt).min(bottom).max(0.0);
+        // the lowest row the light may be on: its orb reaches 2.5 pixels (1.25
+        // rows) from its middle, so row 1 would still cover the score in row 0
+        light.y = (light.y + light.vy * ctx.dt).min(bottom).max(TOP_ROW);
     }
 
     /// Moves the motes, with a slow sine wobble, and drops the ones that have
@@ -229,7 +297,12 @@ impl Play {
     /// Removes the motes the light touches: one point each, and a ring starts there.
     fn collect(&mut self) {
         let light = disc(self.light.x, self.light.y, LIGHT_RADIUS);
-        let (score, pulses) = (&mut self.score, &mut self.pulses);
+        let (score, pulses, embers, rng) = (
+            &mut self.score,
+            &mut self.pulses,
+            &mut self.embers,
+            &mut self.rng,
+        );
         self.motes.retain(|mote| {
             let touched = light.overlaps(&disc(mote.x, mote.y, MOTE_RADIUS));
             if touched {
@@ -239,6 +312,7 @@ impl Play {
                     y: mote.y,
                     age: 0.0,
                 });
+                embers.burst(rng, mote.x, mote.y, EMBER_COUNT, EMBER_SPEED, EMBER_LIFE);
             }
             !touched
         });
@@ -286,38 +360,58 @@ impl Game for Play {
         }
         self.pulses.retain(|pulse| pulse.age < PULSE_LIFE);
         self.trail(ctx.dt);
+        self.embers.step(ctx.dt);
         Next::stay()
     }
 
     fn draw(&self, screen: &mut Screen) {
         draw_sky(screen, &self.pulses);
-        for spark in self.sparks.iter() {
-            let fade = spark.life / SPARK_LIFE;
-            let ch = if fade > 0.66 {
-                '*'
-            } else if fade > 0.33 {
-                ':'
-            } else {
-                '.'
-            };
-            screen.put(cell(spark.x), cell(spark.y), ch, Colour::BrightCyan);
+        self.draw_halos(screen);
+        hud(screen, self.score, self.clock.remaining());
+        self.draw_shapes(screen);
+    }
+}
+
+impl Play {
+    /// Whether the first update has put the light on the screen. Until then
+    /// the light is at the corner, and a frame drawn now must not show it.
+    fn placed(&self) -> bool {
+        self.clock.fraction() > 0.0
+    }
+
+    /// The soft lights, which paint the cells they cover: the light's halo, and
+    /// a warm halo around each mote that twinkles by changing size.
+    fn draw_halos(&self, screen: &mut Screen) {
+        let time = screen.time();
+        if self.placed() {
+            let (x, y) = centre(self.light.x, self.light.y);
+            let breath = 1.0 + 0.1 * (time * 3.0).sin();
+            screen.glow(x, y, HALO_RADIUS * breath, &self.light_glow);
         }
         for mote in self.motes.iter() {
-            // twinkles between a star and a ring
-            let ch = if (screen.time() * 8.0 + mote.phase).sin() > 0.0 {
-                '*'
-            } else {
-                'o'
-            };
-            screen.put(cell(mote.x), cell(mote.y), ch, Colour::BrightYellow);
+            let (x, y) = centre(mote.x, mote.y);
+            let twinkle = 1.0 + 0.15 * (time * 5.0 + mote.phase).sin();
+            screen.glow(x, y, MOTE_HALO * twinkle, &self.mote_glow);
         }
-        hud(screen, self.score, self.clock.remaining());
-        screen.put(
-            cell(self.light.x),
-            cell(self.light.y),
-            '@',
-            Colour::BrightWhite,
-        );
+    }
+
+    /// The pixel shapes, drawn last so they show above the HUD: the trail, the
+    /// motes and the light's orb.
+    fn draw_shapes(&self, screen: &mut Screen) {
+        for spark in self.sparks.iter() {
+            let (x, y) = centre(spark.x, spark.y);
+            let colour = fade_colour(&self.trail, spark.life / SPARK_LIFE);
+            screen.pixel(x.floor() as i32, y.floor() as i32, colour);
+        }
+        for mote in self.motes.iter() {
+            let (x, y) = centre(mote.x, mote.y);
+            screen.disc(x, y, MOTE_DISC, Colour::BrightYellow);
+        }
+        if self.placed() {
+            let (x, y) = centre(self.light.x, self.light.y);
+            screen.disc(x, y, ORB_RADIUS, Colour::BrightWhite);
+        }
+        self.embers.draw(screen);
     }
 }
 
@@ -383,6 +477,8 @@ impl Game for Paused {
     }
 
     fn draw(&self, screen: &mut Screen) {
+        // the game's pixels are finished now, so the text below shows above them
+        screen.finish_frame();
         plate(
             screen,
             screen.height() / 2 - 2,
@@ -468,8 +564,17 @@ mod tests {
         assert!(game.quit());
     }
 
+    /// What a cell shows after the frame is finished: character, foreground, background.
+    fn cell_of(screen: &Screen, x: i32, y: i32) -> (char, Colour, Colour) {
+        let pixel = screen
+            .display()
+            .pixel(x as isize, y as isize)
+            .expect("the cell is on the screen");
+        (pixel.character(), pixel.colour(), pixel.background())
+    }
+
     #[test]
-    fn a_mote_is_drawn_as_a_star_or_an_o_in_its_cell() {
+    fn a_mote_is_a_gold_orb_in_its_cell() {
         let mut play = Play::new(1);
         update(&mut play, &Keys::new(), &Pointer::default());
         play.spawn = Timer::once(1000.0);
@@ -483,25 +588,251 @@ mod tests {
         assert!(play.motes.push(mote).is_ok());
         let mut screen = Screen::new(40, 12);
         play.draw(&mut screen);
-        let ch = screen.display().pixel(10, 5).unwrap().character();
-        assert!(ch == '*' || ch == 'o', "{ch:?}");
+        screen.finish_frame();
+        let (_, _, background) = cell_of(&screen, 10, 5);
+        assert_eq!(background, Colour::BrightYellow, "the mote fills its cell");
     }
 
-    #[test]
-    fn a_spark_is_drawn_as_a_fading_dot_in_its_cell() {
+    /// A game with the light at the centre of an 80 by 24 screen, no new
+    /// motes, and nothing else on the screen.
+    fn quiet_play() -> Play {
         let mut play = Play::new(1);
         update(&mut play, &Keys::new(), &Pointer::default());
         play.spawn = Timer::once(1000.0);
-        let spark = Spark {
+        play
+    }
+
+    /// The frame `play` draws, finished, on an 80 by 24 screen.
+    fn frame(play: &Play) -> Screen {
+        let mut screen = Screen::new(80, 24);
+        play.draw(&mut screen);
+        screen.finish_frame();
+        screen
+    }
+
+    #[test]
+    fn a_mote_has_a_warm_halo_that_stays_inside_its_radius() {
+        let plain = frame(&quiet_play());
+        let mut with_mote = quiet_play();
+        let mote = Mote {
+            x: 30.0,
+            y: 10.0,
+            vx: 0.0,
+            vy: 0.0,
+            phase: 0.0,
+        };
+        assert!(with_mote.motes.push(mote).is_ok());
+        let lit = frame(&with_mote);
+        let (cx, cy) = centre(30.0, 10.0);
+        let mut changed = 0;
+        for y in 0..24 {
+            for x in 0..80 {
+                if cell_of(&plain, x, y) != cell_of(&lit, x, y) {
+                    changed += 1;
+                    // a cell's middle, in pixels, from the middle of the mote
+                    let dx = x as f32 + 0.5 - cx;
+                    let dy = 2.0 * y as f32 + 1.0 - cy;
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    assert!(
+                        distance <= MOTE_HALO * 1.15,
+                        "cell ({x}, {y}) is {distance:.1} pixels from the mote"
+                    );
+                }
+            }
+        }
+        assert!(changed > 10, "a halo, not only the disc: {changed} cells");
+    }
+
+    #[test]
+    fn the_light_has_a_soft_halo_around_its_orb() {
+        let mut lit = quiet_play();
+        lit.sparks.clear();
+        let mut away = quiet_play();
+        away.sparks.clear();
+        away.light = Light {
+            x: 5.0,
+            y: 20.0,
+            vx: 0.0,
+            vy: 0.0,
+        };
+        let (here, there) = (frame(&lit), frame(&away));
+        let (cx, cy) = centre(40.0, 12.0);
+        let mut near = 0;
+        for y in 0..24 {
+            for x in 0..80 {
+                let dx = x as f32 + 0.5 - cx;
+                let dy = 2.0 * y as f32 + 1.0 - cy;
+                if dx * dx + dy * dy <= 100.0 && cell_of(&here, x, y) != cell_of(&there, x, y) {
+                    near += 1;
+                }
+            }
+        }
+        assert!(near > 30, "a halo, not only the orb's disc: {near} cells");
+    }
+
+    #[test]
+    fn the_pause_text_shows_above_the_pixels_under_it() {
+        let mut screen = Screen::new(40, 10);
+        screen.clear(Colour::Blue);
+        // pixel rows 6 and 7 are cell row 3, where the PAUSED plate is drawn
+        for x in 0..40 {
+            screen.pixel(x, 6, Colour::Red);
+            screen.pixel(x, 7, Colour::Red);
+        }
+        Paused.draw(&mut screen);
+        screen.finish_frame();
+        let row: String = (0..40).map(|x| cell_of(&screen, x, 3).0).collect();
+        assert!(row.contains("PAUSED"), "{row:?}");
+    }
+
+    #[test]
+    fn drawing_never_panics_with_the_light_and_its_parts_on_any_edge_or_corner() {
+        let spots = [
+            (0.0, 0.0),
+            (11.0, 0.0),
+            (0.0, 4.0),
+            (11.0, 4.0),
+            (5.0, -1.0),
+            (-3.0, -3.0),
+            (15.0, 8.0),
+        ];
+        for (x, y) in spots {
+            let mut play = Play::new(1);
+            update(&mut play, &Keys::new(), &Pointer::default());
+            play.spawn = Timer::once(1000.0);
+            play.light = Light {
+                x,
+                y,
+                vx: 0.0,
+                vy: 0.0,
+            };
+            let mote = Mote {
+                x,
+                y,
+                vx: 0.0,
+                vy: 0.0,
+                phase: 1.0,
+            };
+            assert!(play.motes.push(mote).is_ok());
+            assert!(play.sparks.push(Spark { x, y, life: 0.3 }).is_ok());
+            play.embers.emit(x, y, 1.0, 1.0, 0.5);
+            let mut screen = Screen::new(12, 5);
+            play.draw(&mut screen);
+            screen.finish_frame();
+        }
+    }
+
+    #[test]
+    fn the_light_is_not_drawn_before_its_first_update_places_it() {
+        // a new round draws once before its first update, when the light is
+        // still at the corner: it must not cover the score in the top left
+        let play = Play::new(1);
+        let screen = frame(&play);
+        assert_ne!(
+            cell_of(&screen, 1, 0).2,
+            Colour::BrightWhite,
+            "{:?}",
+            cell_of(&screen, 1, 0)
+        );
+        assert_ne!(
+            cell_of(&screen, 2, 0).2,
+            Colour::BrightWhite,
+            "{:?}",
+            cell_of(&screen, 2, 0)
+        );
+    }
+
+    #[test]
+    fn the_orb_is_drawn_where_the_light_is() {
+        let mut play = Play::new(1);
+        update(&mut play, &Keys::new(), &Pointer::default()); // the light is at (40, 12)
+        play.spawn = Timer::once(1000.0);
+        let mut screen = Screen::new(80, 24);
+        play.draw(&mut screen);
+        screen.finish_frame();
+        let (x, y) = (play.light.x as i32, play.light.y as i32);
+        // the orb's radius is 2.5 pixels, so its middle cell is solid and it
+        // reaches half a cell above and below; a row off would show here
+        let (ch, _, background) = cell_of(&screen, x, y);
+        assert_eq!(
+            (ch, background),
+            (' ', Colour::BrightWhite),
+            "the orb's middle"
+        );
+        let (ch, colour, _) = cell_of(&screen, x, y - 1);
+        assert_eq!(
+            (ch, colour),
+            ('\u{2584}', Colour::BrightWhite),
+            "its top edge"
+        );
+        let (ch, colour, _) = cell_of(&screen, x, y + 1);
+        assert_eq!(
+            (ch, colour),
+            ('\u{2580}', Colour::BrightWhite),
+            "its bottom edge"
+        );
+    }
+
+    #[test]
+    fn the_trail_steps_down_from_bright_to_dim_as_it_ages() {
+        let ramp = trail_palette();
+        let index = |colour: Colour| ramp.colours().iter().position(|c| *c == colour);
+        assert_eq!(
+            fade_colour(&ramp, 1.0),
+            Colour::BrightWhite,
+            "a newborn spark"
+        );
+        assert_eq!(fade_colour(&ramp, 0.0), Colour::Blue, "a spent spark");
+        let indices: Vec<Option<usize>> = (0..=20)
+            .rev()
+            .map(|i| index(fade_colour(&ramp, i as f32 / 20.0)))
+            .collect();
+        // from newborn to spent the index only ever goes down, and it goes all the way
+        assert!(
+            indices.windows(2).all(|pair| pair[0] >= pair[1]),
+            "{indices:?}"
+        );
+        assert_eq!(indices.first(), Some(&Some(3)), "{indices:?}");
+        assert_eq!(indices.last(), Some(&Some(0)), "{indices:?}");
+    }
+
+    #[test]
+    fn a_touch_bursts_sparks_that_are_all_spent_within_two_thirds_of_a_second() {
+        let mut play = mote_on_the_light();
+        play.spawn = Timer::once(1000.0);
+        update(&mut play, &Keys::new(), &Pointer::default());
+        assert_eq!(play.embers.len(), EMBER_COUNT, "the touch makes a burst");
+        for _ in 0..40 {
+            update(&mut play, &Keys::new(), &Pointer::default());
+        }
+        assert!(play.embers.is_empty(), "the burst has died away");
+    }
+
+    #[test]
+    fn a_young_spark_is_brighter_than_an_old_one() {
+        let mut play = Play::new(1);
+        update(&mut play, &Keys::new(), &Pointer::default());
+        play.spawn = Timer::once(1000.0);
+        let young = Spark {
             x: 10.0,
+            y: 5.0,
+            life: SPARK_LIFE,
+        };
+        let old = Spark {
+            x: 30.0,
             y: 5.0,
             life: 0.05,
         };
-        assert!(play.sparks.push(spark).is_ok());
+        assert!(play.sparks.push(young).is_ok());
+        assert!(play.sparks.push(old).is_ok());
         let mut screen = Screen::new(40, 12);
         play.draw(&mut screen);
-        let ch = screen.display().pixel(10, 5).unwrap().character();
-        assert_eq!(ch, '.', "an old spark is a dot");
+        screen.finish_frame();
+        // a spark is one pixel, so the lower half of its cell shows its colour
+        let (_, young_colour, _) = cell_of(&screen, 10, 5);
+        let (_, old_colour, _) = cell_of(&screen, 30, 5);
+        assert_eq!(young_colour, Colour::BrightWhite, "newborn");
+        assert_eq!(old_colour, Colour::Blue, "nearly spent");
     }
 
     #[test]
@@ -526,27 +857,42 @@ mod tests {
         assert!(text.contains("score 0"), "{text}");
     }
 
-    /// Where the light is drawn: (column, row), counted in characters.
-    fn light_at(text: &str) -> Option<(usize, usize)> {
-        text.lines().enumerate().find_map(|(row, line)| {
-            line.chars()
-                .position(|ch| ch == '@')
-                .map(|column| (column, row))
-        })
+    /// Holds `code` for `ticks` updates of `play`, pressing it again every
+    /// quarter second the way a keyboard repeats.
+    fn hold(play: &mut Play, code: KeyCode, ticks: u64) {
+        let pointer = Pointer::default();
+        let mut keys = Keys::new();
+        for tick in 0..ticks {
+            let now = Duration::from_secs_f64(tick as f64 / 60.0);
+            if tick % 15 == 0 {
+                keys.event(&Event::Key(Key::new(code)), now);
+            }
+            keys.tick(now);
+            let mut ctx = Context {
+                keys: &keys,
+                pointer: &pointer,
+                dt: 1.0 / 60.0,
+                tick,
+                size: (80, 24),
+                seed: 1,
+            };
+            play.update(&mut ctx);
+            keys.end_tick();
+        }
     }
 
     #[test]
     fn holding_right_moves_the_light_right() {
-        let mut game = Headless::new(Title);
-        game.tap(KeyCode::Enter);
-        game.step(1);
-        let before = light_at(&game.text()).expect("the light is drawn");
-        game.press(KeyCode::Right);
-        game.step(30);
-        game.release(KeyCode::Right);
-        let after = light_at(&game.text()).expect("the light is still drawn");
-        assert!(after.0 > before.0, "{before:?} then {after:?}");
-        assert_eq!(after.1, before.1, "moving right keeps the row");
+        let mut play = Play::new(1);
+        update(&mut play, &Keys::new(), &Pointer::default()); // places the light
+        let before = play.light;
+        hold(&mut play, KeyCode::Right, 30);
+        assert!(
+            play.light.x > before.x + 1.0,
+            "{before:?} then {:?}",
+            play.light
+        );
+        assert_eq!(play.light.y, before.y, "moving right keeps the row");
     }
 
     /// Runs one update of `play` with the given keys and pointer.
@@ -666,6 +1012,7 @@ mod tests {
             assert!(play.motes.len() <= MOTE_LIMIT, "motes at tick {tick}");
             assert!(play.pulses.len() <= PULSE_LIMIT, "pulses at tick {tick}");
             assert!(play.sparks.len() <= SPARK_LIMIT, "sparks at tick {tick}");
+            assert!(play.embers.len() <= EMBER_LIMIT, "embers at tick {tick}");
             most_pulses = most_pulses.max(play.pulses.len());
         }
         assert!(play.score > 0, "the script touched some motes");
@@ -737,6 +1084,17 @@ mod tests {
     }
 
     #[test]
+    fn holding_up_never_covers_the_score_on_the_top_row() {
+        let mut game = Headless::new(Title);
+        game.tap(KeyCode::Enter);
+        game.press(KeyCode::Left); // into the top left corner, where the score is
+        game.press(KeyCode::Up);
+        game.step(300); // far more than the screen is wide or high
+        let text = game.text();
+        assert!(row(&text, 0).starts_with(" score "), "{text}");
+    }
+
+    #[test]
     fn p_pauses_the_round_and_p_again_resumes_it() {
         let mut game = Headless::new(Title);
         game.tap(KeyCode::Enter);
@@ -747,7 +1105,6 @@ mod tests {
         game.step(120);
         let later = game.text();
         assert_eq!(row(&later, 0), row(&frozen, 0), "the clock and score stop");
-        assert_eq!(light_at(&later), light_at(&frozen), "the light stops");
         game.tap(KeyCode::Char('p'));
         assert!(!game.text().contains("PAUSED"), "p resumes");
         game.step(60);
@@ -827,7 +1184,23 @@ mod tests {
         assert!(play.light.x > 50.0, "pulled right: {:?}", play.light);
     }
 
-    /// Plays 1200 ticks of scripted keys and a click, and returns the screen.
+    /// Every cell's character and colours, row by row: the whole picture,
+    /// including the motes and the light, which are not text.
+    fn picture(game: &mut Headless) -> String {
+        let screen = game.screen();
+        let (width, height) = screen.size();
+        let mut out = String::new();
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let (ch, fg, bg) = cell_of(screen, x, y);
+                out.push_str(&format!("{ch}{fg:?}{bg:?} "));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Plays 1200 ticks of scripted keys and a click, and returns the picture.
     fn scripted_game(seed: u64) -> String {
         let mut game = Headless::new(Title).seed(seed);
         game.tap(KeyCode::Enter);
@@ -842,7 +1215,7 @@ mod tests {
             }
             game.step(1);
         }
-        game.text()
+        picture(&mut game)
     }
 
     #[test]
@@ -857,11 +1230,16 @@ mod tests {
 
     #[test]
     fn the_light_stays_on_the_screen() {
-        let mut game = Headless::new(Title);
-        game.tap(KeyCode::Enter);
-        game.press(KeyCode::Left);
-        game.press(KeyCode::Up);
-        game.step(300); // far more than the screen is wide or high
-        assert_eq!(light_at(&game.text()), Some((0, 0)));
+        let mut play = Play::new(1);
+        update(&mut play, &Keys::new(), &Pointer::default()); // places the light
+        hold(&mut play, KeyCode::Left, 300); // far more than the screen is wide
+        hold(&mut play, KeyCode::Up, 300); // or high
+                                           // the top is row 2, below the HUD strip, not row 0
+        assert_eq!(
+            (play.light.x, play.light.y),
+            (0.0, TOP_ROW),
+            "{:?}",
+            play.light
+        );
     }
 }
