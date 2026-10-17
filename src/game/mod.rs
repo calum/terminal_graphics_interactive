@@ -88,8 +88,8 @@ pub use headless::Headless;
 pub use hit::Hit;
 pub use keys::Keys;
 pub use net::{
-    Config, Decode, DecodeError, Desync, Encode, Hasher, Host, Local, Lockstep, PeerId, PlayerId,
-    Progress, Reader, Sim, Tcp, Transport,
+    announce, await_message, Config, Decode, DecodeError, Desync, Encode, Hasher, Host, Local,
+    Lockstep, PeerId, PlayerId, Progress, Reader, Sim, Tcp, Transport,
 };
 pub use particles::{Particle, Particles};
 pub use pixel_art::PixelArt;
