@@ -66,6 +66,7 @@ mod controls;
 mod headless;
 mod hit;
 mod keys;
+pub mod math;
 mod net;
 mod particles;
 mod pixel_art;
@@ -86,7 +87,9 @@ pub use controls::Controls;
 pub use headless::Headless;
 pub use hit::Hit;
 pub use keys::Keys;
-pub use net::{Host, Local, PeerId, PlayerId, Tcp, Transport};
+pub use net::{
+    Decode, DecodeError, Encode, Hasher, Host, Local, PeerId, PlayerId, Reader, Tcp, Transport,
+};
 pub use particles::{Particle, Particles};
 pub use pixel_art::PixelArt;
 pub use pool::Pool;
