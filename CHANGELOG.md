@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `sail: the sea sits lower, fireballs fall a little slower and the boat sails a little faster; overlays are drawn in framed panels (new Screen::frame and clear_pixels).`
 - `Screen::pixel`, `disc`, `glow`, `finish_frame` and `PixelArt`: games draw objects as coloured regions (half-block pixels and soft glows) instead of text characters; `Particles` now draw as coloured pixels. `run` and `Headless` finish each frame for you.
 - `cargo run --example sail`: the flagship game: a sailboat that steers left and right, dodging fireballs that fall from the sky and fizzle out in steam when they reach the water. The sea grows rougher the farther you sail, and the sky runs from dawn to night.
 - `game::Waves` (one sea function for both the picture and the physics: `height`, `slope`, `surface_y`, `tilt` and `shade`, with `calm` and `stormy` presets) and `game::Particles` (pooled bursts, sparks and spray: `emit`, `burst`, `gravity`, `drag`, `palette`, `step` and `draw`, with no allocation after construction).

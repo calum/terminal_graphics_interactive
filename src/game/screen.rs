@@ -635,6 +635,96 @@ impl Screen {
         }
     }
 
+    /// Erases the pixels drawn so far in the `w` by `h` block of cells whose top
+    /// left cell is `(x, y)`, both halves of every cell in it. Cells are counted
+    /// as in [`Screen::put`], not pixels. Pixels outside the block stay, and the
+    /// part off the screen is clipped. A block that is empty erases nothing.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(3, 1);
+    /// screen.pixel(0, 0, Colour::Red);
+    /// screen.pixel(2, 0, Colour::Red);
+    /// screen.clear_pixels(1, 0, 2, 1); // the cells at columns 1 and 2
+    /// screen.finish_frame();
+    /// assert_eq!(screen.display().pixel(0, 0).unwrap().character(), '\u{2580}');
+    /// assert_eq!(screen.display().pixel(2, 0).unwrap().character(), ' ');
+    /// ```
+    pub fn clear_pixels(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let (width, height) = self.size();
+        let x0 = i64::from(x).max(0);
+        let y0 = i64::from(y).max(0);
+        let x1 = (i64::from(x) + i64::from(w)).min(i64::from(width));
+        let y1 = (i64::from(y) + i64::from(h)).min(i64::from(height));
+        for row in y0..y1 {
+            for column in x0..x1 {
+                for half in [2 * row, 2 * row + 1] {
+                    if let Some(pixel) = self.layer_mut(column, half) {
+                        *pixel = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draws a panel: a `w` by `h` rectangle at `(x, y)`, including its border,
+    /// with a double-line border in `border` colour and a diamond at each
+    /// corner, and its inside filled with `background`. Use it for menus,
+    /// pause screens and game-over text. A panel smaller than 2 by 2 draws
+    /// nothing.
+    ///
+    /// The panel also erases the pixels drawn so far under it (see
+    /// [`Screen::clear_pixels`]), so the sea or the sky does not show through.
+    /// Pixels drawn after it still show above it, so draw panels last.
+    ///
+    /// ```
+    /// use terminal_graphics::Colour;
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// let mut screen = Screen::new(12, 4);
+    /// screen.clear(Colour::Blue);
+    /// screen.frame(0, 0, 12, 4, Colour::Yellow, Colour::Black);
+    /// screen.text_centred(1, "paused", Colour::White);
+    /// assert_eq!(screen.display().pixel(0, 0).unwrap().character(), '\u{25C6}');
+    /// assert_eq!(screen.display().pixel(3, 1).unwrap().character(), 'p');
+    /// ```
+    pub fn frame(&mut self, x: i32, y: i32, w: i32, h: i32, border: Colour, background: Colour) {
+        if w < 2 || h < 2 {
+            return;
+        }
+        // i64 so that no position or size overflows; the loops below only visit
+        // the cells of the border that are on the screen, however big the panel
+        let (x0, y0) = (i64::from(x), i64::from(y));
+        let (x1, y1) = (x0 + i64::from(w) - 1, y0 + i64::from(h) - 1);
+        self.fill(x, y, w, h, ' ', border, background);
+        self.clear_pixels(x, y, w, h);
+        let (width, height) = self.size();
+        let (width, height) = (i64::from(width), i64::from(height));
+        for column in x0.max(0)..=x1.min(width - 1) {
+            for row in [y0, y1] {
+                let corner = column == x0 || column == x1;
+                let ch = if corner { '\u{25C6}' } else { '\u{2550}' };
+                self.border_cell(column, row, ch, border, background);
+            }
+        }
+        for row in (y0 + 1).max(0)..=(y1 - 1).min(height - 1) {
+            for column in [x0, x1] {
+                self.border_cell(column, row, '\u{2551}', border, background);
+            }
+        }
+    }
+
+    /// Draws one character of a panel's border, if it is on the screen.
+    fn border_cell(&mut self, x: i64, y: i64, ch: char, colour: Colour, background: Colour) {
+        if let Some(pixel) = self.cell_mut(x, y) {
+            pixel.set_character(ch);
+            pixel.set_colour(colour);
+            pixel.set_background(background);
+        }
+    }
+
     /// The height in square pixels: two for each row, so `pixel_height` is
     /// twice [`Screen::height`].
     ///
@@ -1473,5 +1563,210 @@ mod tests {
         let after = screen.display().pixel(1, 1).unwrap();
         assert_eq!(after.character(), '@');
         assert_eq!(after.background(), before.background());
+    }
+
+    #[test]
+    fn clear_pixels_erases_the_pixels_of_the_cells_inside_and_keeps_the_rest() {
+        let mut screen = Screen::new(4, 3);
+        for y in 0..6 {
+            for x in 0..4 {
+                screen.pixel(x, y, Colour::Red);
+            }
+        }
+        // cells (1, 1) and (2, 1) are pixel rows 2 and 3, columns 1 and 2
+        screen.clear_pixels(1, 1, 2, 1);
+        assert!(
+            !lit(&screen, 1, 2) && !lit(&screen, 2, 3),
+            "inside: both halves"
+        );
+        assert!(
+            !lit(&screen, 2, 2) && !lit(&screen, 1, 3),
+            "inside: the other cells"
+        );
+        assert!(lit(&screen, 0, 2) && lit(&screen, 3, 3), "beside it: kept");
+        assert!(
+            lit(&screen, 1, 1) && lit(&screen, 1, 4),
+            "above and below: kept"
+        );
+    }
+
+    #[test]
+    fn clear_pixels_is_clipped_to_the_screen_and_does_nothing_for_an_empty_block() {
+        let mut screen = Screen::new(3, 2);
+        for y in 0..4 {
+            for x in 0..3 {
+                screen.pixel(x, y, Colour::Red);
+            }
+        }
+        screen.clear_pixels(1, 1, 0, 5);
+        screen.clear_pixels(1, 1, 5, -1);
+        assert_eq!(lit_count(&screen), 12, "an empty block erases nothing");
+        screen.clear_pixels(-5, -5, 100, 100);
+        assert_eq!(
+            lit_count(&screen),
+            0,
+            "a block far bigger than the screen clears it"
+        );
+        screen.pixel(0, 0, Colour::Red);
+        screen.clear_pixels(i32::MIN, i32::MAX, i32::MAX, 3);
+        screen.clear_pixels(i32::MAX, i32::MIN, 3, i32::MAX);
+        screen.clear_pixels(i32::MIN, i32::MIN, i32::MIN, i32::MIN);
+        assert!(
+            lit(&screen, 0, 0),
+            "extreme blocks off the screen leave it alone"
+        );
+    }
+
+    #[test]
+    fn a_frame_has_diamond_corners_and_a_double_line_border() {
+        let mut screen = Screen::new(10, 5);
+        screen.clear(Colour::Blue);
+        screen.frame(1, 1, 6, 3, Colour::Yellow, Colour::Black);
+        let ch = |x: isize, y: isize| screen.display().pixel(x, y).unwrap().character();
+        for (x, y) in [(1, 1), (6, 1), (1, 3), (6, 3)] {
+            assert_eq!(ch(x, y), '\u{25C6}', "corner at ({x}, {y})");
+        }
+        assert_eq!(ch(3, 1), '\u{2550}', "top edge");
+        assert_eq!(ch(2, 3), '\u{2550}', "bottom edge");
+        assert_eq!(ch(1, 2), '\u{2551}', "left edge");
+        assert_eq!(ch(6, 2), '\u{2551}', "right edge");
+    }
+
+    #[test]
+    fn a_frame_fills_its_inside_with_the_background_and_leaves_the_outside_alone() {
+        let mut screen = Screen::new(10, 5);
+        screen.clear(Colour::Blue);
+        screen.frame(1, 1, 6, 3, Colour::Yellow, Colour::Black);
+        let inside = screen.display().pixel(3, 2).unwrap();
+        assert_eq!(
+            (inside.character(), inside.background()),
+            (' ', Colour::Black),
+            "the inside is spaces on the background"
+        );
+        let border = screen.display().pixel(1, 1).unwrap();
+        assert_eq!(
+            (border.colour(), border.background()),
+            (Colour::Yellow, Colour::Black)
+        );
+        let outside = screen.display().pixel(0, 0).unwrap();
+        assert_eq!(outside.background(), Colour::Blue, "outside is not touched");
+    }
+
+    #[test]
+    fn a_frame_erases_the_pixels_drawn_before_it_inside_and_keeps_those_outside() {
+        let mut screen = Screen::new(10, 5);
+        for y in 0..10 {
+            for x in 0..10 {
+                screen.pixel(x, y, Colour::Red);
+            }
+        }
+        screen.frame(1, 1, 6, 3, Colour::Yellow, Colour::Black);
+        // the frame covers cell rows 1 to 3 and columns 1 to 6: pixel rows 2 to 7
+        for y in 2..8 {
+            for x in 1..7 {
+                assert!(!lit(&screen, x, y), "({x}, {y}) inside the panel");
+            }
+        }
+        assert!(lit(&screen, 0, 2) && lit(&screen, 7, 5), "beside it");
+        assert!(
+            lit(&screen, 3, 1) && lit(&screen, 3, 8),
+            "above and below it"
+        );
+    }
+
+    #[test]
+    fn a_frame_hanging_off_the_top_left_corner_is_clipped_on_both_edges() {
+        let mut screen = Screen::new(6, 4);
+        screen.clear(Colour::Blue);
+        // the frame covers columns -1 to 2 and rows -1 to 1
+        screen.frame(-1, -1, 4, 3, Colour::Yellow, Colour::Black);
+        let ch = |x: isize, y: isize| screen.display().pixel(x, y).unwrap().character();
+        assert_eq!(ch(2, 0), '\u{2551}', "the right edge is on the screen");
+        assert_eq!(ch(0, 1), '\u{2550}', "the bottom edge is on the screen");
+        assert_eq!(
+            ch(2, 1),
+            '\u{25C6}',
+            "the bottom right corner is on the screen"
+        );
+        assert_eq!(ch(0, 0), ' ', "the inside is filled");
+        assert_eq!(
+            screen.display().pixel(3, 0).unwrap().background(),
+            Colour::Blue
+        );
+    }
+
+    #[test]
+    fn a_frame_with_extreme_positions_and_sizes_does_not_panic() {
+        let mut screen = Screen::new(6, 4);
+        screen.clear(Colour::Blue);
+        screen.frame(
+            i32::MAX - 1,
+            i32::MAX - 1,
+            10,
+            10,
+            Colour::Yellow,
+            Colour::Black,
+        );
+        screen.frame(
+            i32::MIN,
+            i32::MIN,
+            i32::MAX,
+            i32::MAX,
+            Colour::Yellow,
+            Colour::Black,
+        );
+        assert_eq!(
+            screen.display().pixel(0, 0).unwrap().background(),
+            Colour::Blue,
+            "the frames off the screen draw nothing"
+        );
+    }
+
+    #[test]
+    fn a_frame_smaller_than_two_by_two_draws_nothing() {
+        let mut screen = Screen::new(6, 4);
+        screen.clear(Colour::Blue);
+        let before = screen.display().render();
+        for (w, h) in [(1, 3), (3, 1), (0, 0), (-3, 4), (4, -3), (1, 1)] {
+            screen.frame(1, 1, w, h, Colour::Yellow, Colour::Black);
+        }
+        assert_eq!(screen.display().render(), before);
+    }
+
+    #[test]
+    fn a_frame_covering_the_whole_screen_fills_it_and_is_quick() {
+        let mut screen = Screen::new(6, 4);
+        screen.clear(Colour::Blue);
+        screen.pixel(2, 2, Colour::Red);
+        // a huge panel that starts far off the top left: only its middle is on screen
+        screen.frame(
+            -1_000_000,
+            -1_000_000,
+            i32::MAX,
+            i32::MAX,
+            Colour::Yellow,
+            Colour::Black,
+        );
+        screen.finish_frame();
+        assert_eq!(
+            screen.display().pixel(5, 3).unwrap().background(),
+            Colour::Black
+        );
+        assert_eq!(screen.display().render().matches('\u{25C6}').count(), 0);
+    }
+
+    #[test]
+    fn pixels_drawn_after_a_frame_show_above_it() {
+        let mut screen = Screen::new(10, 5);
+        screen.clear(Colour::Blue);
+        screen.frame(1, 1, 6, 3, Colour::Yellow, Colour::Black);
+        screen.pixel(3, 4, Colour::Red); // the top half of cell (3, 2), inside the panel
+        screen.finish_frame();
+        let cell = screen.display().pixel(3, 2).unwrap();
+        assert_eq!(
+            (cell.character(), cell.colour()),
+            ('\u{2580}', Colour::Red),
+            "a pixel drawn after the panel is on top of it"
+        );
     }
 }

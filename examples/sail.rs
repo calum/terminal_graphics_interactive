@@ -96,7 +96,7 @@ fn time_of_day(seconds: f32) -> &'static str {
 }
 
 /// Where the still water sits, as a share of the screen height from the top.
-const WATER_LEVEL: f32 = 0.64;
+const WATER_LEVEL: f32 = 0.72;
 
 /// The row of the still water on a screen `rows` high.
 fn level(rows: f32) -> f32 {
@@ -106,6 +106,30 @@ fn level(rows: f32) -> f32 {
 // ---------------------------------------------------------------------------
 // The sea: four swells, from calm to rough
 // ---------------------------------------------------------------------------
+
+/// The sea's lowest trough may come no closer than this many rows to the bottom
+/// of the screen, so the keel of the boat (which sits in the trough) stays on it.
+const BOTTOM_ROOM: f32 = 1.5;
+
+/// The most the swells can lift or dip the sea at `progress`, in rows: the sum of
+/// their heights, with the set at its biggest.
+fn deepest_swell(progress: f32) -> f32 {
+    let total: f32 = swells(progress, 0.0).iter().map(|s| s.0).sum();
+    total * (1.0 + SET_DEPTH)
+}
+
+/// How much the swells are scaled on a screen `rows` high at `progress`. It is 1
+/// when the deepest trough keeps [`BOTTOM_ROOM`] to spare, and otherwise shrinks
+/// the swells so that it just fits. A tall screen keeps the full swell.
+fn swell_fit(progress: f32, rows: f32) -> f32 {
+    let room = (rows - BOTTOM_ROOM - level(rows)).max(0.0);
+    let deep = deepest_swell(progress);
+    if deep <= room {
+        1.0
+    } else {
+        room / deep
+    }
+}
 
 /// The four swells at progress 0 (calm) and at progress 1 (rough). Wavelengths
 /// are in columns, heights in rows, and speeds in wavelengths a second (negative
@@ -143,11 +167,12 @@ fn swells(progress: f32, phase: f32) -> [(f32, f32, f32); 4] {
 /// The sea at `progress`, at play time `t`, for a run with the given `phase`.
 /// It is rebuilt every tick. The swells change slowly, so the height at one
 /// column changes only a little from one tick to the next.
-fn sea(progress: f32, t: f32, phase: f32) -> Waves {
+fn sea(progress: f32, t: f32, phase: f32, rows: f32) -> Waves {
     let set = 1.0 + SET_DEPTH * (SET_SPEED * t + phase).sin();
+    let fit = swell_fit(progress, rows);
     let mut waves = Waves::new();
     for (height, wavelength, speed) in swells(progress, phase) {
-        waves = waves.layer(height * set, wavelength, speed);
+        waves = waves.layer(height * set * fit, wavelength, speed);
     }
     waves
 }
@@ -180,9 +205,9 @@ fn spawn_interval(progress: f32) -> f32 {
     lerp(SPAWN_CALM, SPAWN_STORM, unit(progress))
 }
 
-/// How much faster fireballs fall at `progress`, from 1 to 1.8.
+/// How much faster fireballs fall at `progress`, from 1 to 1.6.
 fn fall_scale(progress: f32) -> f32 {
-    lerp(1.0, 1.8, unit(progress))
+    lerp(1.0, 1.6, unit(progress))
 }
 
 /// The chance that a spawn comes as a volley of two or three, at `progress`.
@@ -203,8 +228,8 @@ const BOAT_HEIGHT: f32 = 12.0;
 
 /// Columns a second the boat sails sideways when a key is held, and how quickly
 /// its speed eases toward that.
-const SAIL_SPEED: f32 = 18.0;
-const SAIL_EASE: f32 = 4.0;
+const SAIL_SPEED: f32 = 22.5;
+const SAIL_EASE: f32 = 5.0;
 
 /// How fast the hull's keel chases the water, as a spring: stiffness and damping.
 const SPRING: f32 = 36.0;
@@ -311,12 +336,12 @@ const FIREBALL_LIMIT: usize = 16;
 /// A fireball starts this many pixels above the top (so it falls into view), in
 /// pixels a second down at the start, and how fast that speeds up.
 const FALL_FROM: f32 = -2.0;
-const FALL_START: f32 = 6.0;
-const FALL_GRAVITY: f32 = 16.0;
+const FALL_START: f32 = 4.8;
+const FALL_GRAVITY: f32 = 12.8;
 
 /// Wind pushes fireballs left, by this many columns a second.
-const WIND_MIN: f32 = 4.0;
-const WIND_MAX: f32 = 12.0;
+const WIND_MIN: f32 = 3.4;
+const WIND_MAX: f32 = 10.2;
 
 /// One spawn in this many aims near the boat, within this many columns.
 const AIM_CHANCE: f32 = 0.4;
@@ -1090,15 +1115,8 @@ impl Game for Title {
         let t = screen.time();
         let rows = screen.height() as f32;
         let water = level(rows);
-        let waves = sea(0.0, t, 0.0);
-        paint_sky(
-            screen,
-            &self.look.sky,
-            daylight(t * 0.25),
-            0.0,
-            t,
-            water + 2.0,
-        );
+        let waves = sea(0.0, t, 0.0, rows);
+        paint_sky(screen, &self.look.sky, daylight(t * 0.25), 0.0, t, rows);
         paint_sea(screen, &self.look.sea, &waves, t, water);
         // the island scrolls away as the boat sails, one league a second
         paint_island(screen, &self.look, t, &waves, t, water);
@@ -1114,22 +1132,12 @@ impl Game for Title {
             screen.sprite(left + LETTER_STEP * i as i32, 2, letter);
         }
         strip(screen, 0, "best ", self.best);
-        let bottom = screen.height() - 3;
-        plate(screen, bottom, "press Enter to sail", Colour::BrightWhite);
-        plate(
-            screen,
-            bottom + 1,
-            "A/D or arrows steer   p pause   q quit",
-            Colour::White,
-        );
+        let keys = "A/D or arrows steer   p pause   q quit";
+        let panel = Panel::new(screen, keys.chars().count() as i32, 2, screen.height() - 5);
+        panel.draw(screen);
+        panel.text_line(screen, 0, "press Enter to sail", Colour::BrightWhite);
+        panel.text_line(screen, 1, keys, Colour::White);
     }
-}
-
-/// A line of text centred on a black strip, so it reads over the sky.
-fn plate(screen: &mut Screen, row: i32, text: &str, colour: Colour) {
-    let width = screen.width();
-    screen.fill(0, row, width, 1, ' ', colour, Colour::Black);
-    screen.text_centred(row, text, colour);
 }
 
 /// A black strip across row `row` that says `label` and a number.
@@ -1161,8 +1169,11 @@ impl Game for Paused {
     }
 
     fn draw(&self, screen: &mut Screen) {
-        let row = screen.height() - 3;
-        plate(screen, row, "PAUSED  (p to resume)", Colour::BrightWhite);
+        let text = "PAUSED  (p to resume)";
+        let width = text.chars().count() as i32;
+        let panel = Panel::new(screen, width, 1, (screen.height() - 3) / 2);
+        panel.draw(screen);
+        panel.text_line(screen, 0, text, Colour::BrightWhite);
     }
 }
 
@@ -1207,39 +1218,75 @@ impl Game for Over {
         let rows = screen.height() as f32;
         let water = level(rows);
         let light = daylight(self.at);
-        let waves = sea(self.progress, t, self.phase);
-        paint_sky(screen, &self.look.sky, light, 0.0, t, water + 2.0);
+        let waves = sea(self.progress, t, self.phase, rows);
+        paint_sky(screen, &self.look.sky, light, 0.0, t, rows);
         paint_stars(screen, night(light), t, (water - 4.0) * 2.0);
         paint_celestial(screen, &self.look, self.at, &waves, t, water);
         paint_sea(screen, &self.look.sea, &waves, t, water);
-        // the words sit on the sea, at the bottom, where no pixel picture reaches
-        let bottom = screen.height() - 6;
-        plate(screen, bottom, "the sea wins this time", Colour::BrightRed);
-        centred_number(
-            screen,
-            bottom + 2,
-            "score ",
-            self.score,
-            Colour::BrightYellow,
-        );
-        centred_number(screen, bottom + 3, "best ", self.best, Colour::White);
-        plate(
-            screen,
-            bottom + 5,
-            "Enter: sail again   q: quit",
-            Colour::White,
-        );
+        // the words sit in a panel up in the sky; it is drawn last, so nothing covers it
+        let longest = (OVER_TITLE.chars().count() as i32)
+            .max(OVER_HINT.chars().count() as i32)
+            .max(6 + digit_count(self.score).max(digit_count(self.best)));
+        let top = (screen.height() as f32 * 0.3) as i32;
+        let panel = Panel::new(screen, longest, 6, top);
+        panel.draw(screen);
+        panel.text_line(screen, 0, OVER_TITLE, Colour::BrightRed);
+        panel.number_line(screen, 2, "score ", self.score, Colour::BrightYellow);
+        panel.number_line(screen, 3, "best ", self.best, Colour::White);
+        panel.text_line(screen, 5, OVER_HINT, Colour::White);
     }
 }
 
-/// A line of `label` and then `n`, centred on the screen.
-fn centred_number(screen: &mut Screen, row: i32, label: &str, n: u32, colour: Colour) {
-    let width = screen.width();
-    let total = label.chars().count() as i32 + digit_count(n);
-    let left = (width - total) / 2;
-    screen.fill(0, row, width, 1, ' ', colour, Colour::Black);
-    screen.text(left, row, label, colour);
-    number(screen, left + label.chars().count() as i32, row, n, colour);
+/// The game-over screen's first line and its last.
+const OVER_TITLE: &str = "the sea wins this time";
+const OVER_HINT: &str = "Enter: sail again   q: quit";
+
+/// The colours of a panel's border and of the inside it is filled with.
+const PANEL_EDGE: Colour = Colour::BrightYellow;
+const PANEL_INSIDE: Colour = Colour::Black;
+
+/// A framed panel of text, centred across the screen: a border, and lines of
+/// text inside it. Draw it last, after everything it is over.
+#[derive(Clone, Copy, Debug)]
+struct Panel {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+impl Panel {
+    /// A panel for lines up to `width` columns wide, `lines` lines tall, with its
+    /// top edge `top` rows down. It has two columns of padding inside its border.
+    fn new(screen: &Screen, width: i32, lines: i32, top: i32) -> Panel {
+        let w = width + 6;
+        Panel {
+            x: (screen.width() - w) / 2,
+            y: top,
+            w,
+            h: lines + 2,
+        }
+    }
+
+    /// Draws the border and fills the inside.
+    fn draw(&self, screen: &mut Screen) {
+        screen.frame(self.x, self.y, self.w, self.h, PANEL_EDGE, PANEL_INSIDE);
+    }
+
+    /// Line `line` (from 0) of `text`, centred inside the panel.
+    fn text_line(&self, screen: &mut Screen, line: i32, text: &str, colour: Colour) {
+        let left = self.x + (self.w - text.chars().count() as i32) / 2;
+        screen.text(left, self.y + 1 + line, text, colour);
+    }
+
+    /// Line `line` of `label` and then `n`, centred inside the panel.
+    fn number_line(&self, screen: &mut Screen, line: i32, label: &str, n: u32, colour: Colour) {
+        let label_width = label.chars().count() as i32;
+        let left = self.x + (self.w - label_width - digit_count(n)) / 2;
+        let row = self.y + 1 + line;
+        screen.text(left, row, label, colour);
+        number(screen, left + label_width, row, n, colour);
+    }
 }
 
 /// How many decimal digits `n` has.
@@ -1442,10 +1489,17 @@ impl Game for Play {
         let t = self.elapsed;
         let water = level(screen.height() as f32);
         let progress = progress_of(self.distance);
-        let waves = sea(progress, t, self.phase);
+        let waves = sea(progress, t, self.phase, screen.height() as f32);
         let light = daylight(t);
         let flash = if self.flashing() { 1.0 } else { 0.0 };
-        paint_sky(screen, &self.look.sky, light, flash, t, water + 2.0);
+        paint_sky(
+            screen,
+            &self.look.sky,
+            light,
+            flash,
+            t,
+            screen.height() as f32,
+        );
         paint_stars(screen, night(light), t, (water - 4.0) * 2.0);
         paint_celestial(screen, &self.look, t, &waves, t, water);
         paint_sea(screen, &self.look.sea, &waves, t, water);
@@ -1495,7 +1549,7 @@ impl Game for Play {
         self.distance += sail_speed(progress_of(self.distance)) * dt;
         let progress = progress_of(self.distance);
         let t = self.elapsed;
-        let waves = sea(progress, t, self.phase);
+        let waves = sea(progress, t, self.phase, rows);
 
         self.boat.place(width, |x| keel_under(&waves, x, t, water));
         let across = self.controls.axis(ctx.keys, Action::Left, Action::Right) as f32;
@@ -1607,14 +1661,14 @@ mod tests {
     }
 
     /// The sea as the game has it right now.
-    fn waves_now(play: &Play) -> Waves {
-        sea(progress_of(play.distance), play.elapsed, play.phase)
+    fn waves_now(play: &Play, rows: f32) -> Waves {
+        sea(progress_of(play.distance), play.elapsed, play.phase, rows)
     }
 
     /// The keel row the water asks for under the boat's middle, now.
     fn keel_wanted(play: &Play, rows: f32) -> f32 {
         keel_under(
-            &waves_now(play),
+            &waves_now(play, rows),
             play.boat.centre(),
             play.elapsed,
             level(rows),
@@ -1777,12 +1831,12 @@ mod tests {
         let dt = 1.0 / 60.0;
         let mut distance = 0.0_f32;
         let mut elapsed = 0.0_f32;
-        let mut previous = sea(0.0, 0.0, phase);
+        let mut previous = sea(0.0, 0.0, phase, 24.0);
         let mut worst = 0.0_f32;
         for _ in 0..12000 {
             let progress = progress_of(distance);
             elapsed += dt;
-            let waves = sea(progress, elapsed, phase);
+            let waves = sea(progress, elapsed, phase, 24.0);
             // the same moment on both sides, so only the rebuild can change the height
             for x in 0..80 {
                 let jump =
@@ -1803,7 +1857,7 @@ mod tests {
         play.launch(80.0, 30.0, 0.0);
         let f = *play.fireballs.get(0).expect("one fireball");
         assert!(f.y < 0.0, "it starts above the top: {}", f.y);
-        assert!((-12.0..=-4.0).contains(&f.vx), "wind to the left: {}", f.vx);
+        assert!((-10.2..=-3.4).contains(&f.vx), "wind to the left: {}", f.vx);
         rig.run(&mut play, 30);
         let later = *play.fireballs.get(0).expect("still in the air");
         assert!(later.y > f.y, "it falls: {} then {}", f.y, later.y);
@@ -1821,7 +1875,19 @@ mod tests {
             last = gap;
         }
         assert!((fall_scale(0.0) - 1.0).abs() < 1e-5);
-        assert!((fall_scale(1.0) - 1.8).abs() < 1e-5);
+        assert!(
+            (fall_scale(1.0) - 1.6).abs() < 1e-5,
+            "the top speed is 1.6 times the start"
+        );
+        let mut last_scale = 0.0_f32;
+        for i in 0..=100 {
+            let scale = fall_scale(i as f32 / 100.0);
+            assert!(
+                scale >= last_scale - 1e-6,
+                "the fall speed fell back at {i}"
+            );
+            last_scale = scale;
+        }
     }
 
     #[test]
@@ -1836,7 +1902,7 @@ mod tests {
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
         let x = 60.0;
-        let water = 2.0 * waves_now(&play).surface_y(x, play.elapsed, level(24.0));
+        let water = 2.0 * waves_now(&play, 24.0).surface_y(x, play.elapsed, level(24.0));
         assert!(play
             .fireballs
             .push(Fireball::new(x, water + 0.5, -6.0, 0.0, 0.0))
@@ -1904,7 +1970,7 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let water = 2.0 * waves_now(&play).surface_y(60.0, play.elapsed, level(24.0));
+        let water = 2.0 * waves_now(&play, 24.0).surface_y(60.0, play.elapsed, level(24.0));
         assert!(play
             .fireballs
             .push(Fireball::new(60.0, water + 0.5, -6.0, 0.0, 0.0))
@@ -2241,7 +2307,7 @@ mod tests {
             let t = i as f32 * 4.1;
             let v = sky_value(&cell, daylight(t), 0.5, t);
             assert!(v.is_finite() && (-1.0..=1.0).contains(&v), "{t}: {v}");
-            let waves = sea(i as f32 / 29.0, t, 0.4);
+            let waves = sea(i as f32 / 29.0, t, 0.4, 24.0);
             let sea_v = sea_value(1.0, 5.0, t, &waves);
             assert!(sea_v.is_finite() && (-1.0..=1.0).contains(&sea_v));
         }
@@ -2341,7 +2407,7 @@ mod tests {
     #[test]
     fn the_sun_is_clipped_by_the_water_so_it_never_shows_below_the_surface() {
         let mut screen = black_screen(80, 24);
-        let waves = sea(0.0, 0.0, 0.0);
+        let waves = sea(0.0, 0.0, 0.0, 24.0);
         let water = level(24.0);
         // at dawn the sun sits on the horizon, so the waves hide most of it. The
         // glow is painted on cells, so the sea is painted after it, as in a frame
@@ -2389,7 +2455,7 @@ mod tests {
 
     #[test]
     fn the_sea_near_the_surface_is_brighter_than_in_the_deep() {
-        let waves = sea(0.0, 0.0, 0.0);
+        let waves = sea(0.0, 0.0, 0.0, 24.0);
         let surface = waves.surface_y(10.0, 0.0, level(24.0));
         let near = sea_value(0.5, 10.0, 0.0, &waves);
         let deep = sea_value(6.0, 10.0, 0.0, &waves);
@@ -2399,7 +2465,7 @@ mod tests {
 
     #[test]
     fn the_sea_has_no_noise_so_neighbouring_cells_never_jump() {
-        let waves = sea(0.5, 12.0, 0.9);
+        let waves = sea(0.5, 12.0, 0.9, 24.0);
         for x in 0..80 {
             let column = x as f32;
             let mut last = sea_value(1.0, column, 12.0, &waves);
@@ -2602,5 +2668,328 @@ mod tests {
         assert!(text.contains("score 3"), "{text}");
         assert!(text.contains("best 9"), "{text}");
         assert!(text.contains("Enter: sail again"), "{text}");
+    }
+
+    /// Seconds for a fireball to fall from its spawn to the water under column
+    /// 32.5 (the boat's middle on an 80 by 24 screen) at `progress`. It is averaged
+    /// over three runs of the sea and 200 moments, the same way the baseline was.
+    fn seconds_to_the_water(progress: f32) -> f32 {
+        let scale = fall_scale(progress);
+        let dt = 1.0 / 60.0;
+        let (mut total, mut n) = (0.0_f32, 0);
+        for phase in [0.0_f32, 2.0, 4.0] {
+            for k in 0..200 {
+                let t0 = k as f32 * 0.05;
+                let mut f = Fireball::new(
+                    32.5,
+                    FALL_FROM,
+                    0.0,
+                    FALL_START * scale,
+                    FALL_GRAVITY * scale,
+                );
+                let mut elapsed = 0.0_f32;
+                loop {
+                    f.fall(dt);
+                    elapsed += dt;
+                    let t = t0 + elapsed;
+                    let surface = sea(progress, t, phase, 24.0).surface_y(32.5, t, level(24.0));
+                    if f.y >= 2.0 * surface || elapsed > 10.0 {
+                        break;
+                    }
+                }
+                total += elapsed;
+                n += 1;
+            }
+        }
+        total / n as f32
+    }
+
+    /// The fall to the water before this change, measured on the old sea (level
+    /// 0.64, no scaling) with the method of [`seconds_to_the_water`]: 1.667 s at
+    /// progress 0 and 1.185 s at progress 1.
+    const FALL_SECONDS_CALM_BEFORE: f32 = 1.6672;
+    const FALL_SECONDS_STORM_BEFORE: f32 = 1.1847;
+
+    #[test]
+    fn fireballs_take_at_least_a_fifth_longer_to_reach_the_water_when_calm_and_15_percent_longer_in_the_storm(
+    ) {
+        let calm = seconds_to_the_water(0.0);
+        let storm = seconds_to_the_water(1.0);
+        assert!(
+            calm >= 1.2 * FALL_SECONDS_CALM_BEFORE,
+            "calm: {calm} s, was {FALL_SECONDS_CALM_BEFORE} s"
+        );
+        assert!(
+            storm >= 1.15 * FALL_SECONDS_STORM_BEFORE,
+            "storm: {storm} s, was {FALL_SECONDS_STORM_BEFORE} s"
+        );
+    }
+
+    /// The boat's top speed in columns a second, held to the right on a screen 400
+    /// columns wide so that no edge stops it. Before this change it was 18.
+    fn boat_top_speed() -> f32 {
+        let mut play = Play::new(1, 0);
+        play.spawn = Timer::every(1000.0);
+        let mut rig = Rig::new((400, 24));
+        rig.run(&mut play, 1);
+        rig.press(KeyCode::Right);
+        let mut top = 0.0_f32;
+        for _ in 0..180 {
+            rig.update(&mut play);
+            top = top.max(play.boat.vx);
+        }
+        top
+    }
+
+    #[test]
+    fn the_boat_sails_about_a_quarter_faster_than_its_old_top_speed_of_18_columns_a_second() {
+        let top = boat_top_speed();
+        assert!(
+            (1.2 * 18.0..=1.4 * 18.0).contains(&top),
+            "the top speed is {top} columns a second; it should be 1.2 to 1.4 times 18"
+        );
+    }
+
+    /// Seconds for the boat to sail from 0.2 to 0.6 of an 80 column screen, held to
+    /// the right. It was 2.017 seconds before the boat was made faster.
+    fn crossing_seconds() -> f32 {
+        let mut play = Play::new(1, 0);
+        play.spawn = Timer::every(1000.0);
+        let mut rig = Rig::new((80, 24));
+        rig.run(&mut play, 1);
+        rig.press(KeyCode::Left);
+        rig.run(&mut play, 600);
+        rig.release(KeyCode::Left);
+        assert!(
+            (play.boat.x - 16.0).abs() < 0.01,
+            "parked at 0.2: {}",
+            play.boat.x
+        );
+        rig.press(KeyCode::Right);
+        let mut ticks = 0;
+        while play.boat.x < 48.0 - 1e-3 && ticks < 3000 {
+            rig.update(&mut play);
+            ticks += 1;
+        }
+        ticks as f32 / 60.0
+    }
+
+    #[test]
+    fn the_boat_crosses_the_middle_of_the_screen_about_a_fifth_sooner() {
+        let seconds = crossing_seconds();
+        assert!(
+            seconds <= 0.85 * 2.017,
+            "the crossing took {seconds} s; it took 2.017 s before"
+        );
+    }
+
+    #[test]
+    fn the_title_controls_sit_in_a_framed_panel_like_the_other_screens() {
+        let mut game = Headless::new(Title::new(0)).size(80, 24);
+        game.step(3);
+        let text = game.text();
+        assert_eq!(text.matches('\u{25C6}').count(), 4, "four corners:\n{text}");
+        assert!(
+            text.contains("A/D or arrows steer   p pause   q quit"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_still_water_sits_low_at_seventy_two_hundredths_of_the_screen() {
+        assert!((level(100.0) - 72.0).abs() < 1e-4, "{}", level(100.0));
+    }
+
+    #[test]
+    fn the_stormy_troughs_stay_a_row_and_a_half_above_the_bottom_on_short_screens() {
+        for rows in [20.0_f32, 24.0, 40.0] {
+            for phase in [0.0_f32, 1.3] {
+                for k in 0..600 {
+                    let t = k as f32 / 10.0;
+                    let waves = sea(1.0, t, phase, rows);
+                    for x in 0..100 {
+                        let y = waves.surface_y(x as f32, t, level(rows));
+                        assert!(
+                            y <= rows - 1.5 + 1e-3,
+                            "{rows} rows: column {x} at {t} s is at row {y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The column where `needle` starts in `line`, counted in characters.
+    fn column_of(line: &str, needle: &str) -> usize {
+        let byte = line.find(needle).expect("the text is on this line");
+        line[..byte].chars().count()
+    }
+
+    #[test]
+    fn the_game_over_text_sits_in_a_framed_panel_with_diamond_corners() {
+        let mut game = Headless::new(Over::new(3, 9, 0.0, 0.0, 0.0)).size(80, 24);
+        game.step(2);
+        let text = game.text();
+        let lines: Vec<&str> = text.lines().collect();
+        let corner_rows: Vec<usize> = (0..lines.len())
+            .filter(|&row| lines[row].contains('\u{25C6}'))
+            .collect();
+        assert_eq!(corner_rows.len(), 2, "a top and a bottom edge:\n{text}");
+        let (top, bottom) = (corner_rows[0], corner_rows[1]);
+        let left = column_of(lines[top], "\u{25C6}");
+        let right = lines[top]
+            .rfind('\u{25C6}')
+            .map(|b| lines[top][..b].chars().count());
+        let right = right.expect("a right corner");
+        assert!(
+            lines[top].contains('\u{2550}'),
+            "a double line along the top:\n{text}"
+        );
+        for line in &lines[top + 1..bottom] {
+            assert!(line.contains('\u{2551}'), "the sides:\n{text}");
+        }
+        for word in [
+            "the sea wins this time",
+            "score 3",
+            "best 9",
+            "Enter: sail again   q: quit",
+        ] {
+            let row = lines.iter().position(|l| l.contains(word)).expect(word);
+            assert!(
+                row > top && row < bottom,
+                "{word} is inside the panel:\n{text}"
+            );
+            let start = column_of(lines[row], word);
+            assert!(
+                start > left && start + word.chars().count() < right,
+                "{word} is inside the panel's sides:\n{text}"
+            );
+        }
+    }
+
+    /// The top left and bottom right diamonds of the panel on `screen`, as cells.
+    fn panel_box(screen: &Screen) -> ((isize, isize), (isize, isize)) {
+        let (width, height) = screen.size();
+        let mut corners = Vec::new();
+        for y in 0..height as isize {
+            for x in 0..width as isize {
+                if screen.display().pixel(x, y).unwrap().character() == '\u{25C6}' {
+                    corners.push((x, y));
+                }
+            }
+        }
+        (corners[0], corners[corners.len() - 1])
+    }
+
+    #[test]
+    fn nothing_shows_through_the_game_over_panel_with_the_moon_and_stars_behind_it() {
+        let mut game = Headless::new(Over::new(3, 9, 90.0, 1.0, 0.4)).size(80, 24);
+        game.step(2);
+        let screen = game.screen();
+        let ((x0, y0), (x1, y1)) = panel_box(screen);
+        for y in y0 + 1..y1 {
+            for x in x0 + 1..x1 {
+                let cell = screen.display().pixel(x, y).unwrap();
+                assert_eq!(cell.background(), PANEL_INSIDE, "({x}, {y}) is the panel's");
+                assert!(
+                    !matches!(
+                        cell.character(),
+                        '\u{2580}' | '\u{2584}' | '\u{2588}' | '\u{2591}' | '\u{2592}' | '\u{2593}'
+                    ),
+                    "a picture shows through at ({x}, {y}): {:?}",
+                    cell.character()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn both_panels_are_whole_on_every_screen_from_60_by_18_to_200_by_50() {
+        for width in (60..=200).step_by(5) {
+            for height in 18..=50 {
+                let mut over =
+                    Headless::new(Over::new(123_456, 999_999, 90.0, 0.5, 0.4)).size(width, height);
+                over.step(2);
+                let text = over.text();
+                assert_eq!(
+                    text.matches('\u{25C6}').count(),
+                    4,
+                    "the game-over panel's four corners at {width}x{height}:\n{text}"
+                );
+                assert!(text.contains("Enter: sail again"), "{width}x{height}");
+
+                let mut paused = Headless::new(Play::new(1, 0)).size(width, height);
+                paused.step(2);
+                paused.tap(KeyCode::Char('p'));
+                let text = paused.text();
+                assert_eq!(
+                    text.matches('\u{25C6}').count(),
+                    4,
+                    "the pause panel's four corners at {width}x{height}:\n{text}"
+                );
+                assert!(text.contains("PAUSED  (p to resume)"), "{width}x{height}");
+            }
+        }
+    }
+
+    #[test]
+    fn no_black_gap_shows_in_the_sky_above_a_trough_at_noon_in_the_roughest_sea() {
+        // the troughs swell and die down, so look at a stretch of the bright middle of the day
+        let mut play = Play::new(1, 0);
+        play.distance = DISTANCE_MAX;
+        let water = level(24.0);
+        for k in 0..80 {
+            let t = 20.0 + k as f32 * 0.25;
+            play.elapsed = t;
+            let screen = frame(&play, 80, 24);
+            let waves = sea(1.0, t, play.phase, 24.0);
+            for x in 0..80 {
+                let surface = waves.surface_y(x as f32, t, water);
+                for row in 1..24 {
+                    if (row as f32) + 1.0 < surface - 0.5 {
+                        let bg = screen.display().pixel(x, row).unwrap().background();
+                        assert_ne!(bg, Colour::Black, "a gap at {t} s, column {x}, row {row}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tall_screen_keeps_the_full_swell_and_a_short_one_scales_it_down() {
+        assert_eq!(swell_fit(1.0, 40.0), 1.0, "40 rows: the full storm");
+        assert!(swell_fit(1.0, 24.0) < 1.0, "24 rows: scaled a little");
+        assert!(swell_fit(1.0, 20.0) < 1.0, "20 rows: scaled down");
+        assert_eq!(swell_fit(0.0, 20.0), 1.0, "the calm sea always fits");
+    }
+
+    #[test]
+    fn a_settled_boat_keeps_its_keel_on_the_screen_in_the_roughest_sea() {
+        for rows in [20_u32, 24, 40] {
+            let mut play = Play::new(1, 0);
+            play.distance = DISTANCE_MAX;
+            play.spawn = Timer::every(1000.0);
+            let mut rig = Rig::new((80, rows));
+            rig.run(&mut play, 600);
+            // fifty seconds of sailing to and fro, so the boat meets the troughs of many columns
+            for tick in 0..3000 {
+                if tick % 240 == 0 {
+                    let (off, on) = if (tick / 240) % 2 == 0 {
+                        (KeyCode::Left, KeyCode::Right)
+                    } else {
+                        (KeyCode::Right, KeyCode::Left)
+                    };
+                    rig.release(off);
+                    rig.press(on);
+                }
+                rig.update(&mut play);
+                assert!(
+                    play.boat.keel < 2.0 * rows as f32,
+                    "{rows} rows: the keel is at pixel {} of {}",
+                    play.boat.keel,
+                    2 * rows
+                );
+            }
+        }
     }
 }
