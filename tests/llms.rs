@@ -152,3 +152,16 @@ fn recommends_the_single_prelude_import_and_does_not_misplace_the_shapes() {
         "Rect and Ball are not root re-exports; point to the prelude instead"
     );
 }
+
+#[test]
+fn explains_that_pastes_are_one_event_and_that_matches_need_a_wildcard() {
+    let text = llms();
+    assert!(
+        text.contains("Event::Paste"),
+        "pasted text arrives as Event::Paste"
+    );
+    assert!(
+        text.contains("`_ =>"),
+        "Event can grow, so a match needs a `_ =>` arm"
+    );
+}
