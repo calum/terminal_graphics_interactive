@@ -170,7 +170,9 @@ impl Particles {
     }
 
     /// Moves every particle for `dt` seconds, then removes the ones that have
-    /// lived out their `life`.
+    /// lived out their `life`. A negative or non-finite `dt` does nothing. A
+    /// particle whose numbers overflow to infinity is removed too, so the
+    /// system never holds a non-finite particle.
     ///
     /// ```
     /// use terminal_graphics_interactive::game::*;
