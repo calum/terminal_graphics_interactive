@@ -30,6 +30,10 @@ pub struct Parser {
     /// them from the front of the buffer after every event would make a large
     /// paste quadratic.
     start: usize,
+    /// A cursor position report is on its way (see `expect_cursor_position`).
+    expect_report: bool,
+    /// The last report received, until it is taken.
+    report: Option<(u32, u32)>,
 }
 
 impl Parser {
@@ -51,7 +55,16 @@ impl Parser {
     /// The next complete event, or `None` if more bytes are needed.
     pub fn next_event(&mut self) -> Option<Event> {
         loop {
-            match parse_front(&self.buffer[self.start..]) {
+            let front = &self.buffer[self.start..];
+            if self.expect_report {
+                if let Some((used, row, column)) = parse_cursor_report(front) {
+                    self.report = Some((row, column));
+                    self.expect_report = false;
+                    self.start += used;
+                    continue;
+                }
+            }
+            match parse_front(front) {
                 Step::Event(event, used) => {
                     self.start += used;
                     return Some(event);
@@ -60,6 +73,25 @@ impl Parser {
                 Step::Incomplete => return None,
             }
         }
+    }
+
+    /// Tells the parser that a cursor position report (`ESC [ row ; col R`) is
+    /// on its way, in answer to a `ESC [ 6 n` query. The next such sequence is
+    /// then kept for [`Parser::take_cursor_position`] instead of being read as
+    /// a key, because it is otherwise indistinguishable from Ctrl+F3.
+    pub fn expect_cursor_position(&mut self) {
+        self.expect_report = true;
+    }
+
+    /// The `(row, column)` of the last cursor position report, counted from 1,
+    /// or `None` if none has arrived since this was last called.
+    pub fn take_cursor_position(&mut self) -> Option<(u32, u32)> {
+        self.report.take()
+    }
+
+    /// Stops expecting a cursor position report (the query got no answer).
+    pub(crate) fn cancel_cursor_position(&mut self) {
+        self.expect_report = false;
     }
 
     /// Whether bytes are waiting for the rest of an escape sequence. After
@@ -80,6 +112,14 @@ impl Parser {
         }
         None
     }
+}
+
+/// `ESC [ row ; column R` at the front of `buf`: the bytes used, the row and the column.
+fn parse_cursor_report(buf: &[u8]) -> Option<(usize, u32, u32)> {
+    let rest = buf.strip_prefix(&[ESC, b'['])?;
+    let end = rest.iter().position(|&b| b == b'R')?;
+    let (row, column) = std::str::from_utf8(&rest[..end]).ok()?.split_once(';')?;
+    Some((2 + end + 1, row.parse().ok()?, column.parse().ok()?))
 }
 
 fn parse_front(buf: &[u8]) -> Step {
@@ -557,6 +597,58 @@ mod tests {
         p.feed(b"A");
         assert!(p.next_event().is_some());
         assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn a_cursor_position_like_sequence_is_ctrl_f3_unless_a_report_was_expected() {
+        assert_eq!(
+            parse(b"\x1b[1;5R"),
+            vec![key_mod(KeyCode::F(3), false, false, true)]
+        );
+    }
+
+    #[test]
+    fn an_expected_cursor_position_report_is_taken_not_returned_as_an_event() {
+        let mut p = Parser::new();
+        p.expect_cursor_position();
+        p.feed(b"\x1b[24;80R");
+        assert_eq!(p.next_event(), None);
+        assert_eq!(p.take_cursor_position(), Some((24, 80)));
+        assert_eq!(p.take_cursor_position(), None, "taking clears it");
+    }
+
+    #[test]
+    fn only_one_report_is_swallowed_per_expectation() {
+        let mut p = Parser::new();
+        p.expect_cursor_position();
+        p.feed(b"\x1b[24;80R\x1b[1;5R");
+        assert_eq!(
+            p.next_event(),
+            Some(key_mod(KeyCode::F(3), false, false, true))
+        );
+        assert_eq!(p.take_cursor_position(), Some((24, 80)));
+    }
+
+    #[test]
+    fn a_report_split_across_feeds_and_surrounded_by_keys_is_handled() {
+        let mut p = Parser::new();
+        p.expect_cursor_position();
+        p.feed(b"a\x1b[24");
+        assert_eq!(p.next_event(), Some(key(KeyCode::Char('a'))));
+        assert_eq!(p.next_event(), None);
+        p.feed(b";80Rb");
+        assert_eq!(p.next_event(), Some(key(KeyCode::Char('b'))));
+        assert_eq!(p.take_cursor_position(), Some((24, 80)));
+    }
+
+    #[test]
+    fn other_input_while_a_report_is_expected_is_unaffected() {
+        let mut p = Parser::new();
+        p.expect_cursor_position();
+        p.feed(b"\x1b[A\x1b[<0;1;1M");
+        assert_eq!(p.next_event(), Some(key(KeyCode::Up)));
+        assert!(matches!(p.next_event(), Some(Event::Mouse(_))));
+        assert_eq!(p.take_cursor_position(), None);
     }
 
     #[test]

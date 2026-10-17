@@ -70,6 +70,11 @@ struct PROCESS_INFORMATION {
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
 const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
 const WAIT_TIMEOUT: u32 = 0x102;
+/// The size of the pseudo console (see `CreatePseudoConsole`) and the reply it
+/// gives to the cursor position query that `Terminal::start` uses to find it.
+const PTY_COLUMNS: u32 = 200;
+const PTY_ROWS: u32 = 24;
+const SIZE_REPLY: &[u8] = b"\x1b[24;200R";
 const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 const INVALID_HANDLE_VALUE: HANDLE = -1;
 
@@ -140,25 +145,25 @@ struct Pty {
     output: Arc<Mutex<Vec<u8>>>,
 }
 
-fn events_example() -> PathBuf {
-    // target/debug/deps/<test>.exe -> target/debug/examples/events.exe
+fn example(name: &str) -> PathBuf {
+    // target/debug/deps/<test>.exe -> target/debug/examples/<name>.exe
     // `cargo test --test e2e_windows` does not build examples, so build it here
     static BUILD: std::sync::Once = std::sync::Once::new();
     BUILD.call_once(|| {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let status = std::process::Command::new(cargo)
-            .args(["build", "--example", "events"])
+            .args(["build", "--examples"])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .expect("could not run cargo");
-        assert!(status.success(), "building the events example failed");
+        assert!(status.success(), "building the examples failed");
     });
 
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
     path.push("examples");
-    path.push("events.exe");
+    path.push(format!("{name}.exe"));
     assert!(path.exists(), "{} was not built", path.display());
     path
 }
@@ -261,7 +266,7 @@ impl Pty {
                     }
                     let chunk = &buffer[..read as usize];
                     if chunk.windows(4).any(|w| w == b"\x1b[6n") {
-                        write_to(*reader_input.lock().unwrap(), b"\x1b[1;1R");
+                        write_to(*reader_input.lock().unwrap(), SIZE_REPLY);
                     }
                     reader_output.lock().unwrap().extend_from_slice(chunk);
                 }

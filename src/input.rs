@@ -6,6 +6,7 @@
 
 use crate::event::Event;
 use crate::parser::Parser;
+use std::collections::VecDeque;
 use std::io;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
@@ -23,6 +24,8 @@ pub(crate) struct Input {
     parser: Parser,
     /// When bytes that could not yet be parsed first arrived.
     pending_since: Option<Instant>,
+    /// Events that arrived while waiting for something else (the size reply).
+    queue: VecDeque<Event>,
 }
 
 impl Input {
@@ -31,12 +34,47 @@ impl Input {
             chunks,
             parser: Parser::new(),
             pending_since: None,
+            queue: VecDeque::new(),
         }
+    }
+
+    /// Waits up to `timeout` for the terminal's reply to a cursor position
+    /// query that the caller has just sent, and returns `(width, height)`
+    /// (the cursor was moved to the bottom right corner first). Keys and mouse
+    /// events that arrive meanwhile are kept for `poll`.
+    pub(crate) fn request_size(&mut self, timeout: Duration) -> Option<(u32, u32)> {
+        self.parser.expect_cursor_position();
+        let deadline = Instant::now() + timeout.min(MAX_TIMEOUT);
+        let size = loop {
+            // events that arrive meanwhile are kept for `poll`
+            while let Some(event) = self.parser.next_event() {
+                self.queue.push_back(event);
+            }
+            if let Some((row, column)) = self.parser.take_cursor_position() {
+                break Some((column, row));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break None;
+            }
+            match self.chunks.recv_timeout(remaining) {
+                Ok(bytes) => {
+                    self.parser.feed(&bytes);
+                    self.pending_since = None;
+                }
+                Err(_) => break None,
+            }
+        };
+        self.parser.cancel_cursor_position();
+        size
     }
 
     /// Waits up to `timeout` for the next event. `Ok(None)` means the time ran
     /// out; an error means the input has ended (stdin was closed).
     pub(crate) fn poll(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
+        if let Some(event) = self.queue.pop_front() {
+            return Ok(Some(event));
+        }
         // Instant arithmetic panics on overflow, so cap absurd timeouts
         let deadline = Instant::now() + timeout.min(MAX_TIMEOUT);
         loop {
@@ -195,6 +233,62 @@ mod tests {
         assert_eq!(input.poll(Duration::ZERO).unwrap(), None);
         sleep(ESCAPE_WAIT * 3);
         assert_eq!(input.poll(Duration::ZERO).unwrap(), Some(key(KeyCode::Esc)));
+    }
+
+    #[test]
+    fn request_size_returns_width_and_height_from_the_reply() {
+        let (tx, mut input) = input();
+        tx.send(b"\x1b[24;80R".to_vec()).unwrap();
+        assert_eq!(input.request_size(LONG), Some((80, 24)));
+    }
+
+    #[test]
+    fn request_size_waits_for_a_reply_that_arrives_later() {
+        let (tx, mut input) = input();
+        let sender = std::thread::spawn(move || {
+            sleep(Duration::from_millis(40));
+            tx.send(b"\x1b[30;100R".to_vec()).unwrap();
+            tx
+        });
+        assert_eq!(input.request_size(LONG), Some((100, 30)));
+        drop(sender.join().unwrap());
+    }
+
+    #[test]
+    fn request_size_gives_up_after_the_timeout() {
+        let (_tx, mut input) = input();
+        let start = Instant::now();
+        assert_eq!(input.request_size(Duration::from_millis(30)), None);
+        assert!(start.elapsed() >= Duration::from_millis(30));
+    }
+
+    #[test]
+    fn keys_pressed_while_waiting_for_the_size_are_not_lost() {
+        let (tx, mut input) = input();
+        tx.send(b"ab\x1b[24;80Rc".to_vec()).unwrap();
+        assert_eq!(input.request_size(LONG), Some((80, 24)));
+        assert_eq!(input.poll(SHORT).unwrap(), Some(key(KeyCode::Char('a'))));
+        assert_eq!(input.poll(SHORT).unwrap(), Some(key(KeyCode::Char('b'))));
+        assert_eq!(input.poll(SHORT).unwrap(), Some(key(KeyCode::Char('c'))));
+        assert_eq!(input.poll(SHORT).unwrap(), None);
+    }
+
+    #[test]
+    fn after_a_timed_out_request_a_lookalike_key_is_a_key_again() {
+        let (tx, mut input) = input();
+        assert_eq!(input.request_size(Duration::from_millis(10)), None);
+        tx.send(b"\x1b[1;5R".to_vec()).unwrap();
+        match input.poll(LONG).unwrap() {
+            Some(Event::Key(k)) => assert_eq!(k.code, KeyCode::F(3)),
+            other => panic!("expected Ctrl+F3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_size_on_closed_input_returns_none() {
+        let (tx, mut input) = input();
+        drop(tx);
+        assert_eq!(input.request_size(LONG), None);
     }
 
     #[test]
