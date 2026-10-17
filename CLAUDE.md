@@ -76,3 +76,15 @@ Performance is tested, not assumed (zero dependencies, so benchmarks are plain
   the platform shims under `src/raw_mode/` carry `#[allow(unsafe_code)]`.
 - Warnings are errors in CI. `cargo clippy --all-targets`, `cargo fmt --all`.
 - Every user-visible change goes in `CHANGELOG.md`.
+
+## Releasing
+
+CI publishes to crates.io when `master` has a `version` in `Cargo.toml` that is
+not on crates.io yet (the `publish` job in `.github/workflows/ci.yml`). To
+release, bump `version` and move the `## Unreleased` changelog entries under it
+in a PR. Publishing cannot be undone, so:
+
+- the token is the repository **secret** `CARGO_REGISTRY_TOKEN`, never a plain
+  variable (variables are not masked in logs); `tests/ci_workflow.rs` checks this;
+- it only runs on a push to `master`, after the tests and the MSRV check pass;
+- run `cargo publish --dry-run` first.
