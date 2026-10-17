@@ -158,12 +158,21 @@ impl Mouse {
 }
 
 /// One input event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+///
+/// More kinds of event may be added in future, so always end a `match` on an
+/// `Event` with a `_ => {}` arm.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Event {
     /// A key was pressed.
     Key(Key),
     /// The mouse did something.
     Mouse(Mouse),
+    /// Text was pasted. It arrives as one event, not as key presses, so pasting
+    /// a command cannot trigger your key bindings. Needs a terminal that
+    /// supports bracketed paste (Windows Terminal, iTerm2, most Linux terminals);
+    /// others send pasted text as ordinary key presses.
+    Paste(String),
 }
 
 #[cfg(test)]

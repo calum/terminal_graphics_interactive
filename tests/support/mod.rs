@@ -101,6 +101,30 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn pasted_text_arrives_as_one_paste_event_not_key_presses() {
+            let pty = started();
+            // what a terminal sends when you paste, once bracketed paste is on
+            pty.send(b"\x1b[200~cargo run\x1b[201~");
+            pty.expect("Paste(\"cargo run\")");
+            assert!(
+                !pty.text().contains("Char('"),
+                "the pasted letters must not arrive as key presses: {:?}",
+                pty.text()
+            );
+        }
+
+        #[test]
+        fn pasting_a_q_does_not_quit_paint_but_typing_one_does() {
+            let pty = Pty::spawn(&example("paint"));
+            pty.expect("q: quit");
+            pty.send(b"\x1b[200~cargo run q 7 c\x1b[201~");
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            assert!(!pty.has_exited(), "a pasted q quit the program");
+            pty.send(b"q");
+            assert_eq!(pty.exit_code(), 0);
+        }
+
+        #[test]
         fn the_window_size_is_found_by_asking_the_terminal() {
             // Terminal::start moves the cursor to the far corner, asks where it
             // is, and reads the answer; the harness answers like a terminal does

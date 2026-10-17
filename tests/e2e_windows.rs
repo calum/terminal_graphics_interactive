@@ -306,6 +306,12 @@ impl Pty {
         );
     }
 
+    /// Whether the program has already exited.
+    fn has_exited(&self) -> bool {
+        // SAFETY: `process` is a live process handle owned by this struct.
+        unsafe { WaitForSingleObject(self.process, 0) != WAIT_TIMEOUT }
+    }
+
     /// Waits for the program to exit and returns its exit code.
     fn exit_code(&self) -> u32 {
         // SAFETY: `process` is a live process handle owned by this struct.
