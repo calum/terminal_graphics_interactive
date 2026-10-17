@@ -165,7 +165,7 @@ fn events_example() -> PathBuf {
 
 impl Pty {
     /// Starts `program` in a 200 column by 24 row pseudo console.
-    fn spawn(program: &PathBuf) -> Pty {
+    fn spawn(program: &std::path::Path) -> Pty {
         // SAFETY (whole function): plain Win32 calls with valid, live pointers;
         // every handle created here is closed in `Drop` or handed to the reader.
         unsafe {
