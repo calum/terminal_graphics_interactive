@@ -10,9 +10,10 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::start()?;
     let mut out = io::stdout();
     // `\r\n` because raw mode turns off the terminal's own newline handling
+    let (width, height) = terminal.size();
     write!(
         out,
-        "Move, click, drag, scroll or type. q or Ctrl+C quits.\r\n"
+        "Move, click, drag, scroll or type. q or Ctrl+C quits.\r\nsize: {width}x{height}\r\n"
     )?;
     out.flush()?;
 

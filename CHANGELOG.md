@@ -16,3 +16,4 @@
 - Re-exports `terminal_graphics`.
 - End-to-end tests on Windows (`tests/e2e_windows.rs`): the `events` example runs in a ConPTY pseudo console and is fed raw key and mouse sequences.
 - Shared end-to-end scenarios (`tests/support`) and a Unix pty harness (`tests/e2e_unix.rs`), plus a CI workflow running the suite on Ubuntu, macOS and Windows and a Rust 1.70 check.
+- `Terminal` now uses the alternate screen and finds the window size by asking the terminal (`Terminal::size`), falling back to 80x24. `Terminal::draw(&display)` shows a `Display` at the top left, so `Mouse::cell_in(&display)` maps a mouse event straight to a cell. `Parser::expect_cursor_position` / `take_cursor_position` handle the size reply, which is otherwise indistinguishable from Ctrl+F3.

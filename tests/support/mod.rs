@@ -55,6 +55,14 @@ macro_rules! e2e_scenarios {
         }
 
         #[test]
+        fn the_window_size_is_found_by_asking_the_terminal() {
+            // Terminal::start moves the cursor to the far corner, asks where it
+            // is, and reads the answer; the harness answers like a terminal does
+            let pty = started();
+            pty.expect(&format!("size: {PTY_COLUMNS}x{PTY_ROWS}"));
+        }
+
+        #[test]
         fn a_key_arrives_immediately_without_pressing_enter() {
             let pty = started();
             pty.send(b"a");

@@ -41,6 +41,11 @@ const O_NOCTTY: c_int = 0x20000;
 const F_SETFD: c_int = 2;
 const FD_CLOEXEC: c_int = 1;
 
+/// The size this fake terminal reports, matching the Windows harness.
+const PTY_COLUMNS: u32 = 200;
+const PTY_ROWS: u32 = 24;
+const SIZE_REPLY: &[u8] = b"\x1b[24;200R";
+
 /// `ptsname` returns a pointer to static storage, so only one thread may use it.
 static PTY_LOCK: Mutex<()> = Mutex::new(());
 
@@ -117,6 +122,7 @@ impl Pty {
 
         let output = Arc::new(Mutex::new(Vec::new()));
         let mut reader = master.try_clone().unwrap();
+        let mut replier = master.try_clone().unwrap();
         let sink = Arc::clone(&output);
         thread::spawn(move || {
             let mut buffer = [0u8; 4096];
@@ -125,7 +131,13 @@ impl Pty {
                 if read == 0 {
                     break;
                 }
-                sink.lock().unwrap().extend_from_slice(&buffer[..read]);
+                let chunk = &buffer[..read];
+                // act as the terminal emulator: answer the cursor position
+                // query that `Terminal::start` uses to find the window size
+                if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                    let _ = replier.write_all(SIZE_REPLY);
+                }
+                sink.lock().unwrap().extend_from_slice(chunk);
             }
         });
 

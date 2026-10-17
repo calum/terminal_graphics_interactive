@@ -7,18 +7,51 @@ use std::io::{self, Read, Write};
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use std::time::Duration;
+use terminal_graphics::Display;
 
 const HIDE_CURSOR: &str = "\x1b[?25l";
 const SHOW_CURSOR: &str = "\x1b[?25h";
+const ENTER_ALT_SCREEN: &str = "\x1b[?1049h";
+const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
+
+/// Used when the terminal does not answer the size query.
+const DEFAULT_SIZE: (u32, u32) = (80, 24);
+
+/// How long to wait for the terminal to answer the size query.
+const SIZE_REPLY_WAIT: Duration = Duration::from_millis(300);
 
 /// What is printed when a session starts: mouse reporting on, cursor hidden.
 fn start_sequence() -> String {
-    format!("{MOUSE_ON}{HIDE_CURSOR}")
+    format!("{ENTER_ALT_SCREEN}{MOUSE_ON}{HIDE_CURSOR}")
 }
 
 /// What is printed when a session ends: undo everything `start_sequence` did.
 fn stop_sequence() -> String {
-    format!("{MOUSE_OFF}{SHOW_CURSOR}")
+    format!("{MOUSE_OFF}{SHOW_CURSOR}{LEAVE_ALT_SCREEN}")
+}
+
+/// Moves the cursor to the far bottom right corner (terminals stop at the
+/// edge), asks where it is, and returns it home. The reply is the size.
+fn size_query_sequence() -> String {
+    "[999;999H[6n[H".to_string()
+}
+
+/// The size to use for a terminal's reply `(width, height)`, if there was one.
+fn size_from_reply(reply: Option<(u32, u32)>) -> (u32, u32) {
+    match reply {
+        Some((width, height)) if width > 0 && height > 0 => (width, height),
+        _ => DEFAULT_SIZE,
+    }
+}
+
+/// What to print to show `display`: park the cursor one row below where the
+/// display will go, because `Display::render` starts by moving up its height.
+fn frame_for(display: &Display) -> String {
+    let (_, height) = display.size();
+    if height == 0 {
+        return String::new();
+    }
+    format!("[{};1H{}", height + 1, display.render())
 }
 
 /// Reads `reader` on a background thread and sends each chunk it gets down the
@@ -49,8 +82,10 @@ fn spawn_reader(mut reader: impl Read + Send + 'static) -> io::Result<Receiver<V
 /// An interactive terminal session: keyboard and mouse input for a program
 /// that draws with [`Display`](terminal_graphics::Display).
 ///
-/// [`Terminal::start`] puts the terminal in raw mode, asks it to report the
-/// mouse, hides the cursor, and starts reading input in the background.
+/// [`Terminal::start`] switches to the alternate screen (your scrollback is
+/// restored on exit), puts the terminal in raw mode, asks it to report the
+/// mouse, hides the cursor, finds out the window size, and starts reading
+/// input in the background.
 /// Dropping the `Terminal` undoes all of it (including during a panic), so
 /// the shell is left as it was found.
 ///
@@ -81,6 +116,7 @@ fn spawn_reader(mut reader: impl Read + Send + 'static) -> io::Result<Receiver<V
 /// ```
 pub struct Terminal {
     input: Input,
+    size: (u32, u32),
     /// Declared last so the terminal is restored after the sequences below are printed.
     _raw: RawMode,
 }
@@ -93,10 +129,39 @@ impl Terminal {
         out.write_all(start_sequence().as_bytes())?;
         out.flush()?;
         let chunks = spawn_reader(io::stdin())?;
+        let mut input = Input::new(chunks);
+
+        // ask the terminal how big it is; if it never answers, assume 80x24
+        out.write_all(size_query_sequence().as_bytes())?;
+        out.flush()?;
+        let size = size_from_reply(input.request_size(SIZE_REPLY_WAIT));
+
         Ok(Terminal {
-            input: Input::new(chunks),
+            input,
+            size,
             _raw: raw,
         })
+    }
+
+    /// The size of the terminal window in cells, `(width, height)`, measured
+    /// when the session started. It is `(80, 24)` if the terminal did not
+    /// answer the query. Make a [`Display`] one row shorter than the height,
+    /// so it fits with [`Terminal::draw`].
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// Shows `display` at the top left of the terminal, replacing what was
+    /// there. The top left cell of the display is the terminal's `(0, 0)`, so
+    /// [`Mouse::cell_in`](crate::Mouse::cell_in) maps a mouse event straight to
+    /// a cell. The display must be at most one row shorter than the terminal
+    /// (`height() - 1`) and no wider than it, or it will be drawn off screen.
+    ///
+    /// Call it once per frame.
+    pub fn draw(&mut self, display: &Display) -> io::Result<()> {
+        let mut out = io::stdout();
+        out.write_all(frame_for(display).as_bytes())?;
+        out.flush()
     }
 
     /// Waits up to `timeout` for the next event. `Ok(None)` means nothing
@@ -145,6 +210,61 @@ mod tests {
         let stop = stop_sequence();
         assert!(stop.contains(MOUSE_OFF));
         assert!(stop.contains(SHOW_CURSOR));
+    }
+
+    #[test]
+    fn start_enters_the_alternate_screen_and_stop_leaves_it_last() {
+        assert!(start_sequence().contains(ENTER_ALT_SCREEN));
+        let stop = stop_sequence();
+        assert!(stop.ends_with(LEAVE_ALT_SCREEN), "{stop:?}");
+    }
+
+    #[test]
+    fn the_size_query_goes_to_the_far_corner_asks_for_the_cursor_and_comes_back() {
+        let query = size_query_sequence();
+        let corner = query
+            .find("\x1b[999;999H")
+            .expect("moves to the far corner");
+        let ask = query.find("\x1b[6n").expect("asks for the cursor position");
+        assert!(corner < ask);
+        assert!(
+            query.ends_with("\x1b[H"),
+            "returns the cursor home: {query:?}"
+        );
+    }
+
+    #[test]
+    fn size_from_a_reply_uses_it() {
+        assert_eq!(size_from_reply(Some((120, 40))), (120, 40));
+    }
+
+    #[test]
+    fn size_without_a_usable_reply_falls_back_to_80_by_24() {
+        assert_eq!(size_from_reply(None), (80, 24));
+        assert_eq!(size_from_reply(Some((0, 0))), (80, 24));
+        assert_eq!(size_from_reply(Some((0, 30))), (80, 24));
+        assert_eq!(size_from_reply(Some((90, 0))), (80, 24));
+    }
+
+    #[test]
+    fn a_frame_puts_the_cursor_one_row_below_the_display_then_renders_it() {
+        // render() moves up by the display height, which lands on row 1
+        let mut display = Display::new(10, 3);
+        display.set_pixel(
+            0,
+            0,
+            'x',
+            terminal_graphics::Colour::Red,
+            terminal_graphics::Colour::Blue,
+        );
+        let frame = frame_for(&display);
+        assert!(frame.starts_with("\x1b[4;1H"), "{frame:?}");
+        assert!(frame.ends_with(&display.render()));
+    }
+
+    #[test]
+    fn a_frame_for_an_empty_display_is_empty() {
+        assert_eq!(frame_for(&Display::new(10, 0)), "");
     }
 
     #[test]

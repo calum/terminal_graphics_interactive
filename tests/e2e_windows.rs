@@ -70,6 +70,11 @@ struct PROCESS_INFORMATION {
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
 const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
 const WAIT_TIMEOUT: u32 = 0x102;
+/// The size of the pseudo console (see `CreatePseudoConsole`) and the reply it
+/// gives to the cursor position query that `Terminal::start` uses to find it.
+const PTY_COLUMNS: u32 = 200;
+const PTY_ROWS: u32 = 24;
+const SIZE_REPLY: &[u8] = b"\x1b[24;200R";
 const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 const INVALID_HANDLE_VALUE: HANDLE = -1;
 
@@ -261,7 +266,7 @@ impl Pty {
                     }
                     let chunk = &buffer[..read as usize];
                     if chunk.windows(4).any(|w| w == b"\x1b[6n") {
-                        write_to(*reader_input.lock().unwrap(), b"\x1b[1;1R");
+                        write_to(*reader_input.lock().unwrap(), SIZE_REPLY);
                     }
                     reader_output.lock().unwrap().extend_from_slice(chunk);
                 }

@@ -136,6 +136,27 @@ pub struct Mouse {
     pub modifiers: Modifiers,
 }
 
+impl Mouse {
+    /// The cell of `display` under the mouse, or `None` if the mouse is
+    /// outside it. The display is assumed to be drawn with
+    /// [`Terminal::draw`](crate::Terminal::draw), which puts its top left cell
+    /// at the top left of the terminal, so no offset is needed.
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::{Display, Modifiers, Mouse, MouseKind};
+    ///
+    /// let display = Display::new(10, 4);
+    /// let click = Mouse { kind: MouseKind::Moved, x: 3, y: 2, modifiers: Modifiers::NONE };
+    /// assert_eq!(click.cell_in(&display), Some((3, 2)));
+    /// ```
+    pub fn cell_in(&self, display: &terminal_graphics::Display) -> Option<(isize, isize)> {
+        let (width, height) = display.size();
+        let inside =
+            self.x >= 0 && self.y >= 0 && self.x < width as isize && self.y < height as isize;
+        inside.then_some((self.x, self.y))
+    }
+}
+
 /// One input event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Event {
@@ -143,4 +164,40 @@ pub enum Event {
     Key(Key),
     /// The mouse did something.
     Mouse(Mouse),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminal_graphics::Display;
+
+    fn mouse_at(x: isize, y: isize) -> Mouse {
+        Mouse {
+            kind: MouseKind::Moved,
+            x,
+            y,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn cell_in_gives_the_cell_when_the_mouse_is_over_the_display() {
+        let display = Display::new(10, 4);
+        assert_eq!(mouse_at(0, 0).cell_in(&display), Some((0, 0)));
+        assert_eq!(mouse_at(9, 3).cell_in(&display), Some((9, 3)));
+    }
+
+    #[test]
+    fn cell_in_is_none_outside_the_display() {
+        let display = Display::new(10, 4);
+        assert_eq!(mouse_at(10, 0).cell_in(&display), None);
+        assert_eq!(mouse_at(0, 4).cell_in(&display), None);
+        assert_eq!(mouse_at(-1, 0).cell_in(&display), None);
+        assert_eq!(mouse_at(0, -1).cell_in(&display), None);
+    }
+
+    #[test]
+    fn cell_in_is_none_for_an_empty_display() {
+        assert_eq!(mouse_at(0, 0).cell_in(&Display::new(0, 0)), None);
+    }
 }
