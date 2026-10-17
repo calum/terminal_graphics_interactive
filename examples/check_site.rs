@@ -18,6 +18,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Replaces `requestAnimationFrame` with a clock the test steps by hand, so
@@ -140,6 +141,7 @@ const HARNESS: &str = r####"
     pre.textContent = lines.join("\n");
     document.body.appendChild(pre);
     document.title = "RESULT";
+    fetch("/done");
   }
 
   checks().catch(function (error) { check("the checks ran to the end", false, String(error)); }).then(finish);
@@ -167,6 +169,8 @@ fn with_harness(html: &str) -> String {
     page.push_str(&format!("<script>{STUB}</script>\n"));
     page.push_str(&html[content..end]);
     page.push_str(&format!("<script>{HARNESS}</script>\n"));
+    // the browser dumps the page once it has loaded, so keep it loading until the checks are done
+    page.push_str("<script src=\"/wait.js\"></script>\n");
     page.push_str(&html[end..]);
     page
 }
@@ -243,14 +247,55 @@ fn route(site: &Path, path: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
-fn serve_one(site: &Path, mut stream: TcpStream) {
+/// Set when the checks have finished, so the held-open page can finish loading.
+struct Done {
+    finished: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Done {
+    fn new() -> Self {
+        Done {
+            finished: Mutex::new(false),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn finish(&self) {
+        *self.finished.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+
+    /// Waits until `finish` is called, or gives up after `limit`.
+    fn wait(&self, limit: Duration) {
+        let finished = self.finished.lock().unwrap();
+        let _ = self
+            .changed
+            .wait_timeout_while(finished, limit, |finished| !*finished);
+    }
+}
+
+/// The longest the page is held open, so a broken check cannot hang a build.
+const HOLD_LIMIT: Duration = Duration::from_secs(120);
+
+fn serve_one(site: &Path, mut stream: TcpStream, done: &Done) {
     let mut buffer = [0u8; 4096];
     let Ok(length) = stream.read(&mut buffer) else {
         return;
     };
     let request = String::from_utf8_lossy(&buffer[..length]);
     let path = request.split_whitespace().nth(1).unwrap_or("/");
-    let (status, kind, body) = route(site, path);
+    let (status, kind, body) = match path {
+        "/wait.js" => {
+            done.wait(HOLD_LIMIT);
+            (200, "text/javascript; charset=utf-8", Vec::new())
+        }
+        "/done" => {
+            done.finish();
+            (200, "text/plain", b"done".to_vec())
+        }
+        _ => route(site, path),
+    };
     let reason = if status == 200 { "OK" } else { "Not Found" };
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -258,6 +303,21 @@ fn serve_one(site: &Path, mut stream: TcpStream) {
     );
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(&body);
+}
+
+/// Starts the test server on a free local port and returns the port.
+fn start_server(site: &Path) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free local port");
+    let port = listener.local_addr().expect("an address").port();
+    let site = site.to_path_buf();
+    let done = Arc::new(Done::new());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (site, done) = (site.clone(), Arc::clone(&done));
+            std::thread::spawn(move || serve_one(&site, stream, &done));
+        }
+    });
+    port
 }
 
 /// A browser that can run headless, if one is installed.
@@ -306,15 +366,7 @@ fn main() {
         std::process::exit(if require { 1 } else { 0 });
     };
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a free local port");
-    let port = listener.local_addr().expect("an address").port();
-    let served = site.clone();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let site = served.clone();
-            std::thread::spawn(move || serve_one(&site, stream));
-        }
-    });
+    let port = start_server(&site);
 
     let started = Instant::now();
     let output = Command::new(&browser)
@@ -324,15 +376,16 @@ fn main() {
             "--no-sandbox",
             "--hide-scrollbars",
             "--window-size=1100,2300",
-            "--virtual-time-budget=30000",
             "--dump-dom",
         ])
         .arg(format!("http://127.0.0.1:{port}/harness.html"))
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
         .output();
-    let dom = match output {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+    let (dom, errors) = match output {
+        Ok(output) => (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ),
         Err(error) => {
             eprintln!("could not run {}: {error}", browser.display());
             std::process::exit(1);
@@ -344,6 +397,17 @@ fn main() {
             "the browser never produced a report after {:?}",
             Duration::from_millis(started.elapsed().as_millis() as u64)
         );
+        let tail = |text: &str| {
+            text.chars()
+                .rev()
+                .take(1500)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+        };
+        eprintln!("--- browser messages (last part):\n{}", tail(&errors));
+        eprintln!("--- page (last part):\n{}", tail(&dom));
         std::process::exit(1);
     };
     for name in &report.passed {
@@ -481,6 +545,45 @@ mod tests {
             assert_eq!(route(&dir, sneaky).0, 404, "{sneaky}");
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_page_is_held_open_until_the_checks_say_they_are_done() {
+        let page = with_harness(PAGE);
+        assert!(page.contains("/wait.js"), "the page asks to be held");
+        assert!(HARNESS.contains("/done"), "the checks say when they finish");
+        let wait = page.find("/wait.js").unwrap();
+        let checks = page.find("harness-report").unwrap();
+        assert!(checks < wait, "the checks start before the page waits");
+    }
+
+    #[test]
+    fn the_server_holds_wait_js_until_done_is_requested() {
+        let dir = site_dir("hold");
+        let port = start_server(&dir);
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(get(port, "/wait.js"));
+        });
+        assert!(
+            received.recv_timeout(Duration::from_millis(300)).is_err(),
+            "wait.js must not answer before /done"
+        );
+        assert!(get(port, "/done").starts_with("HTTP/1.1 200"));
+        let answer = received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait.js answers once done");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// One plain HTTP GET against the test server, answered as text.
+    fn get(port: u16, path: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        answer
     }
 
     #[test]
