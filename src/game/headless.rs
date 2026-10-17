@@ -275,6 +275,62 @@ impl Headless {
         });
     }
 
+    /// Feeds one mouse event to the pointer, exactly as the real loop does.
+    /// Use it for buttons held down and drags, which [`click`](Headless::click)
+    /// and [`pointer_to`](Headless::pointer_to) cannot do. A button goes down
+    /// with `Down` and stays down until `Up`, and `ctx.pointer.left` is true on
+    /// every update in between.
+    ///
+    /// ```
+    /// use terminal_graphics_interactive::game::*;
+    ///
+    /// // counts the updates with the button down, and remembers where the pointer is
+    /// struct Drag {
+    ///     held: u32,
+    ///     at: (f32, f32),
+    /// }
+    /// impl Game for Drag {
+    ///     fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+    ///         if ctx.pointer.left {
+    ///             self.held += 1;
+    ///         }
+    ///         self.at = (ctx.pointer.x, ctx.pointer.y);
+    ///         Next::stay()
+    ///     }
+    ///     fn draw(&self, screen: &mut Screen) {
+    ///         let (x, y) = self.at;
+    ///         screen.text(0, 0, &format!("held {} at {} {}", self.held, x, y), Colour::White);
+    ///     }
+    /// }
+    ///
+    /// let mut game = Headless::new(Drag { held: 0, at: (0.0, 0.0) }).size(30, 1);
+    /// game.mouse(&Mouse {
+    ///     kind: MouseKind::Down(MouseButton::Left),
+    ///     x: 1,
+    ///     y: 2,
+    ///     modifiers: Modifiers::NONE,
+    /// });
+    /// game.step(2);
+    /// game.mouse(&Mouse {
+    ///     kind: MouseKind::Drag(MouseButton::Left),
+    ///     x: 5,
+    ///     y: 2,
+    ///     modifiers: Modifiers::NONE,
+    /// });
+    /// game.step(1);
+    /// game.mouse(&Mouse {
+    ///     kind: MouseKind::Up(MouseButton::Left),
+    ///     x: 5,
+    ///     y: 2,
+    ///     modifiers: Modifiers::NONE,
+    /// });
+    /// game.step(1);
+    /// assert_eq!(game.text(), "held 3 at 5 2");
+    /// ```
+    pub fn mouse(&mut self, mouse: &Mouse) {
+        self.pointer.update(mouse);
+    }
+
     /// Runs `ticks` updates, or fewer if the game quits first.
     ///
     /// ```
@@ -504,6 +560,77 @@ mod tests {
         game.click(3, 4);
         game.step(3);
         assert_eq!(*seen.borrow(), vec![(0, (3.0, 4.0))]);
+    }
+
+    /// Records whether the left button was down on each update.
+    struct LeftDown(Shared<Vec<bool>>);
+
+    impl Game for LeftDown {
+        fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+            self.0.borrow_mut().push(ctx.pointer.left);
+            Next::Stay
+        }
+    }
+
+    #[test]
+    fn a_mouse_button_held_down_is_seen_on_every_update_until_it_is_up() {
+        let seen: Shared<Vec<bool>> = Rc::new(RefCell::new(Vec::new()));
+        let mut game = Headless::new(LeftDown(Rc::clone(&seen)));
+        game.mouse(&Mouse {
+            kind: MouseKind::Down(MouseButton::Left),
+            x: 1,
+            y: 1,
+            modifiers: Modifiers::NONE,
+        });
+        game.step(3);
+        game.mouse(&Mouse {
+            kind: MouseKind::Up(MouseButton::Left),
+            x: 1,
+            y: 1,
+            modifiers: Modifiers::NONE,
+        });
+        game.step(2);
+        assert_eq!(*seen.borrow(), vec![true, true, true, false, false]);
+    }
+
+    /// Records the pointer position on each update.
+    struct PointerAt(Shared<Vec<(f32, f32)>>);
+
+    impl Game for PointerAt {
+        fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+            self.0.borrow_mut().push((ctx.pointer.x, ctx.pointer.y));
+            Next::Stay
+        }
+    }
+
+    #[test]
+    fn a_drag_moves_the_pointer() {
+        let seen: Shared<Vec<(f32, f32)>> = Rc::new(RefCell::new(Vec::new()));
+        let mut game = Headless::new(PointerAt(Rc::clone(&seen)));
+        game.mouse(&Mouse {
+            kind: MouseKind::Drag(MouseButton::Left),
+            x: 7,
+            y: 3,
+            modifiers: Modifiers::NONE,
+        });
+        game.step(1);
+        assert_eq!(*seen.borrow(), vec![(7.0, 3.0)]);
+    }
+
+    #[test]
+    fn a_mouse_down_is_one_click_that_the_game_sees_for_one_update() {
+        let seen: Shared<Vec<(usize, (f32, f32))>> = Rc::new(RefCell::new(Vec::new()));
+        let mut game = Headless::new(Clicks {
+            seen: Rc::clone(&seen),
+        });
+        game.mouse(&Mouse {
+            kind: MouseKind::Down(MouseButton::Left),
+            x: 6,
+            y: 2,
+            modifiers: Modifiers::NONE,
+        });
+        game.step(3);
+        assert_eq!(*seen.borrow(), vec![(0, (6.0, 2.0))]);
     }
 
     /// Draws one line of text at row 1.

@@ -51,3 +51,14 @@ test = true
 name = "sail"
 path = "examples/sail.rs"
 test = true
+
+# The generator and the browser check of the website: their own tests run in `cargo test`.
+[[example]]
+name = "build_site"
+path = "examples/build_site.rs"
+test = true
+
+[[example]]
+name = "check_site"
+path = "examples/check_site.rs"
+test = true

@@ -54,6 +54,8 @@
 //!   named actions that players can rebind.
 //! - [`Rng`], [`Timer`], [`Pool`] and [`Hit`]: random numbers, cooldowns,
 //!   fixed-size object lists and collision tests.
+//! - [`Tuning`]: numbers a game exposes so they can be changed while it runs
+//!   (sliders on the website).
 //!
 //! The art modules are in scope too (`use terminal_graphics_interactive::game::*`
 //! brings in `Palette`, `Pointer`, `sketch_frame`, `World`, `Display`, `Colour`
@@ -73,6 +75,7 @@ mod scene;
 mod screen;
 mod sprite;
 mod timer;
+mod tuning;
 mod waves;
 
 pub use crate::prelude::*;
@@ -91,4 +94,5 @@ pub use scene::{Game, Next};
 pub use screen::Screen;
 pub use sprite::Sprite;
 pub use timer::Timer;
+pub use tuning::{Knob, Tuning};
 pub use waves::{Tilt, Waves};
