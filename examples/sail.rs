@@ -291,11 +291,12 @@ impl Boat {
         Hit::rect(self.x, self.top(), BOAT_WIDTH, BOAT_HEIGHT)
     }
 
-    /// On the first call, puts the boat a third of the way across the screen,
-    /// with its keel where `keel_under` says the water is. Then does nothing.
-    fn place(&mut self, width: f32, keel_under: impl Fn(f32) -> f32) {
+    /// On the first call, puts the boat `across` (0 to 1) of the way across the
+    /// screen, with its keel where `keel_under` says the water is. Then does
+    /// nothing.
+    fn place(&mut self, width: f32, across: f32, keel_under: impl Fn(f32) -> f32) {
         if self.keel.is_nan() {
-            self.x = width * 0.3;
+            self.x = width * across;
             self.keel = keel_under(self.centre());
             self.keel_v = 0.0;
         }
@@ -408,8 +409,8 @@ enum Stage {
 }
 
 /// A fireball. `x` is a column and `y` a pixel row. `vx` is columns a second
-/// and `vy` pixels a second, and `gravity` speeds up `vy`. `passed` is set once
-/// it has crossed the boat's column, so its near miss counts once.
+/// and `vy` pixels a second, and `gravity` speeds up `vy`. `passed` has a bit set for each boat
+/// it has crossed the column of, so its near miss counts once for each.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Fireball {
     x: f32,
@@ -417,7 +418,7 @@ struct Fireball {
     vx: f32,
     vy: f32,
     gravity: f32,
-    passed: bool,
+    passed: u8,
     stage: Stage,
 }
 
@@ -429,7 +430,7 @@ impl Fireball {
             vx,
             vy,
             gravity,
-            passed: false,
+            passed: 0,
             stage: Stage::Flying,
         }
     }
@@ -848,12 +849,12 @@ const ISLAND_RISE: i32 = 11;
 
 /// Draws the boat's picture with its left column at `x` and its keel at pixel
 /// row `keel`, leaning as the water under it does.
-fn draw_boat(screen: &mut Screen, look: &Look, x: f32, keel: f32, tilt: Tilt) {
+fn draw_boat(screen: &mut Screen, boats: &[PixelArt; 3], x: f32, keel: f32, tilt: Tilt) {
     let top = keel - (BOAT_HEIGHT - 1.0);
     let art = match tilt {
-        Tilt::Left => &look.boats[0],
-        Tilt::Level => &look.boats[1],
-        Tilt::Right => &look.boats[2],
+        Tilt::Left => &boats[0],
+        Tilt::Level => &boats[1],
+        Tilt::Right => &boats[2],
     };
     screen.pixel_art(x.round() as i32, top.round() as i32, art);
 }
@@ -882,7 +883,11 @@ struct Hud {
     tenths: u32,
     score: u32,
     best: u32,
-    lives: u32,
+    /// The lives each player has left; only the first `players` count.
+    lives: [u32; MAX_BOATS],
+    players: usize,
+    /// Which player this screen is for.
+    me: usize,
     time: &'static str,
 }
 
@@ -900,13 +905,47 @@ fn draw_hud(screen: &mut Screen, hud: &Hud) {
     screen.text(best_at, 0, "best ", Colour::White);
     number(screen, best_at + 5, 0, hud.best, Colour::White);
     let first = width - 2 * LIVES as i32;
+    let mine = hud.lives.get(hud.me).copied().unwrap_or(0);
     for life in 0..LIVES {
-        let colour = if life < hud.lives {
+        let colour = if life < mine {
             Colour::BrightRed
         } else {
             Colour::BrightBlack
         };
         screen.put_on(first + 2 * life as i32, 0, '♥', colour, Colour::Black);
+    }
+    if hud.players > 1 {
+        draw_crews(screen, hud);
+    }
+}
+
+/// In a match, a second strip under the HUD: each player's name and hearts,
+/// yours in white and the others in blue.
+fn draw_crews(screen: &mut Screen, hud: &Hud) {
+    let mut x = 1;
+    for player in 0..hud.players.min(MAX_BOATS) {
+        let colour = if player == hud.me {
+            Colour::BrightWhite
+        } else {
+            Colour::BrightBlue
+        };
+        screen.put_on(x, 1, 'P', colour, Colour::Black);
+        screen.put_on(
+            x + 1,
+            1,
+            (b'1' + player as u8) as char,
+            colour,
+            Colour::Black,
+        );
+        for life in 0..LIVES {
+            let heart = if life < hud.lives[player] {
+                Colour::BrightRed
+            } else {
+                Colour::BrightBlack
+            };
+            screen.put_on(x + 3 + 2 * life as i32, 1, '♥', heart, Colour::Black);
+        }
+        x += 4 + 2 * LIVES as i32 + 1;
     }
 }
 
@@ -954,6 +993,17 @@ const BOAT_LEGEND: [(char, Colour); 7] = [
     ('D', Colour::Yellow),
     ('M', Colour::Yellow),
     ('F', Colour::BrightRed),
+    ('S', Colour::White),
+    ('W', Colour::BrightBlack),
+];
+
+/// The other players' boat: the same picture with a blue hull and pennant.
+const RIVAL_LEGEND: [(char, Colour); 7] = [
+    ('H', Colour::Blue),
+    ('T', Colour::BrightBlue),
+    ('D', Colour::Yellow),
+    ('M', Colour::Yellow),
+    ('F', Colour::BrightBlue),
     ('S', Colour::White),
     ('W', Colour::BrightBlack),
 ];
@@ -1025,12 +1075,15 @@ struct Look {
     sun_glow: Palette,
     /// Indexed as [`draw_boat`] reads it: leaning left, level, leaning right.
     boats: [PixelArt; 3],
+    /// The same boat in blue, for the other players in a match.
+    rivals: [PixelArt; 3],
     island: PixelArt,
 }
 
 impl Look {
     fn new() -> Look {
         let left = PixelArt::new(BOAT_LEFT, &BOAT_LEGEND);
+        let rival_left = PixelArt::new(BOAT_LEFT, &RIVAL_LEGEND);
         Look {
             sky: sky_palette(),
             sea: Palette::ocean(),
@@ -1052,6 +1105,11 @@ impl Look {
                 left.clone(),
                 PixelArt::new(BOAT_LEVEL, &BOAT_LEGEND),
                 left.flipped(),
+            ],
+            rivals: [
+                rival_left.clone(),
+                PixelArt::new(BOAT_LEVEL, &RIVAL_LEGEND),
+                rival_left.flipped(),
             ],
             island: PixelArt::new(ISLAND, &ISLAND_LEGEND),
         }
@@ -1155,7 +1213,7 @@ impl Game for Title {
         let x = screen.width() as f32 / 3.0;
         let centre = x + BOAT_WIDTH / 2.0;
         let keel = keel_under(&waves, centre, t, water);
-        draw_boat(screen, &self.look, x, keel, waves.tilt(centre, t));
+        draw_boat(screen, &self.look.boats, x, keel, waves.tilt(centre, t));
         let word = LETTER_STEP * self.letters.len() as i32 - 1;
         let left = (screen.width() - word) / 2;
         // a dark band behind the letters, so they read over the busy sky
@@ -1365,66 +1423,313 @@ fn controls() -> Controls<Action> {
         .bind(Action::Pause, &[KeyCode::Char('p'), KeyCode::Esc])
 }
 
-/// The game itself.
-struct Play {
-    best: u32,
-    look: Look,
-    elapsed: f32,
-    /// Leagues sailed so far.
-    distance: f32,
-    /// Bonus points for fireballs that passed close.
-    bonus: u32,
-    /// Per run, so that no two seas match.
-    phase: f32,
+// ---------------------------------------------------------------------------
+// The simulation: every rule of a round, with no screen, no keys and no clock
+// ---------------------------------------------------------------------------
+
+/// The most boats in one sea.
+const MAX_BOATS: usize = 8;
+
+/// One update in seconds. The simulation never reads a clock.
+const STEP: f32 = 1.0 / 60.0;
+
+/// What one player wants this update: -1 to steer left, 0 to hold, 1 to steer right.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Steer(i8);
+
+/// What the simulation is told about its surroundings, which is not a player's
+/// input. In a game on one machine it follows the window and the sliders; in a
+/// match between machines it is fixed at the start, so that every machine plays
+/// the same sea.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Env {
+    /// The width of the sea in columns, and its height in rows.
+    width: f32,
+    rows: f32,
+    wave_scale: f32,
+    boat_speed: f32,
+    fireball_rate: f32,
+}
+
+impl Env {
+    /// A sea `size` cells big, with every knob at its default.
+    fn new(size: (u32, u32)) -> Env {
+        Env {
+            width: size.0 as f32,
+            rows: size.1 as f32,
+            wave_scale: 1.0,
+            boat_speed: 1.0,
+            fireball_rate: 1.0,
+        }
+    }
+
+    /// The sea `size` cells big, with the knobs as `tuning` has them now.
+    fn tuned(size: (u32, u32), tuning: &Tuning) -> Env {
+        Env {
+            wave_scale: wave_scale_of(tuning),
+            boat_speed: tuning.get("boat_speed", 1.0),
+            fireball_rate: tuning.get("fireball_rate", 1.0),
+            ..Env::new(size)
+        }
+    }
+}
+
+/// One player's boat and what it has left.
+#[derive(Clone, Copy, Debug)]
+struct Sailor {
     boat: Boat,
-    rng: Rng,
-    controls: Controls<Action>,
     lives: u32,
     /// Play time until which the boat cannot be hit. Negative infinity means never hit.
     invulnerable_until: f32,
-    /// Play time until which the screen flashes after a hit.
-    flash_until: f32,
+}
+
+/// Something that happened in the last update, for the picture to react to
+/// (sparks, steam, a "+5"). It is not part of the rules: it is never hashed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fx {
+    /// A boat was hit, at column `x`, row `row`.
+    Struck { x: f32, row: f32 },
+    /// A fireball reached the water.
+    Steamed { x: f32, row: f32 },
+    /// A fireball passed close to a boat.
+    Near { x: f32, y: f32 },
+}
+
+/// The rules of a round for one or more boats. It holds no random generator
+/// of its own: `step` is given one, so a match can share one stream.
+struct SailSim {
+    env: Env,
+    elapsed: f32,
+    /// Leagues sailed so far.
+    distance: f32,
+    /// Bonus points for fireballs that passed close, for everyone together.
+    bonus: u32,
+    /// Per run, so that no two seas match.
+    phase: f32,
+    sailors: Vec<Sailor>,
     fireballs: Pool<Fireball>,
     spawn: Timer,
+    /// Whether fireballs are sent at all. Off gives a calm sea to practise on.
+    launching: bool,
+    /// What happened in the last step.
+    fx: Vec<Fx>,
+}
+
+impl SailSim {
+    /// A round for `players` boats (1 to [`MAX_BOATS`]) in a sea of `env`.
+    fn new(players: usize, env: Env, rng: &mut Rng) -> SailSim {
+        let phase = rng.f32() * TAU;
+        let sailors = (0..players.clamp(1, MAX_BOATS))
+            .map(|_| Sailor {
+                boat: Boat::new(),
+                lives: LIVES,
+                // finished from the start, so the boat begins vulnerable
+                invulnerable_until: f32::NEG_INFINITY,
+            })
+            .collect();
+        SailSim {
+            env,
+            elapsed: 0.0,
+            distance: 0.0,
+            bonus: 0,
+            phase,
+            sailors,
+            fireballs: Pool::with_capacity(FIREBALL_LIMIT),
+            spawn: Timer::every(SPAWN_CALM),
+            launching: true,
+            fx: Vec::with_capacity(8),
+        }
+    }
+
+    /// The score: a point for every tenth of a league sailed, and the bonuses.
+    fn score(&self) -> u32 {
+        ((self.distance * 10.0).floor() as u32).saturating_add(self.bonus)
+    }
+
+    /// Whether every boat has lost its last life.
+    fn over(&self) -> bool {
+        self.sailors.iter().all(|s| s.lives == 0)
+    }
+
+    /// Runs one update: `inputs[i]` steers boat `i`, and a missing input holds.
+    fn step(&mut self, inputs: &[Steer], rng: &mut Rng) {
+        self.fx.clear();
+        let dt = STEP;
+        let (width, rows) = (self.env.width, self.env.rows);
+        let water = level(rows);
+        self.elapsed += dt;
+        self.distance += sail_speed(progress_of(self.distance)) * dt;
+        let progress = progress_of(self.distance);
+        let t = self.elapsed;
+        let waves = sea_scaled(progress, t, self.phase, rows, self.env.wave_scale);
+
+        for (i, sailor) in self.sailors.iter_mut().enumerate() {
+            if sailor.lives == 0 {
+                continue;
+            }
+            let boat = &mut sailor.boat;
+            // boats start side by side, the first a third of the way across
+            boat.place(width, 0.3 + 0.1 * i as f32, |x| {
+                keel_under(&waves, x, t, water)
+            });
+            let across = inputs.get(i).copied().unwrap_or_default().0.clamp(-1, 1) as f32;
+            boat.steer(
+                across * SAIL_SPEED * self.env.boat_speed,
+                dt,
+                width * 0.2,
+                width * 0.6,
+            );
+            let target = keel_under(&waves, boat.centre(), t, water);
+            boat.settle(target, dt);
+        }
+
+        self.spawn
+            .set_seconds(spawn_interval(progress) / self.env.fireball_rate);
+        let horizon = 2.0 * water;
+        let due = if self.launching {
+            self.spawn.ticks(dt)
+        } else {
+            0
+        };
+        for _ in 0..due {
+            self.launch(width, horizon, progress, rng);
+        }
+        self.fly_fireballs(dt, &waves, water);
+    }
+
+    /// The column of the middle of a boat to aim at: the only one still afloat,
+    /// or a random one of those. `None` once every boat is lost.
+    fn aim_at(&self, rng: &mut Rng) -> Option<f32> {
+        let alive = self.sailors.iter().filter(|s| s.lives > 0).count();
+        let skip = if alive > 1 {
+            rng.range_i32(0, alive as i32) as usize
+        } else {
+            0
+        };
+        self.sailors
+            .iter()
+            .filter(|s| s.lives > 0)
+            .nth(skip)
+            .map(|s| s.boat.centre())
+    }
+
+    /// Sends one fireball, or a volley of two or three, down from above the top.
+    fn launch(&mut self, width: f32, horizon: f32, progress: f32, rng: &mut Rng) {
+        let volley = if rng.chance(volley_chance(progress)) {
+            2 + rng.range_i32(0, 2)
+        } else {
+            1
+        };
+        for _ in 0..volley {
+            let f = self.new_fireball(width, horizon, progress, rng);
+            let _ = self.fireballs.push(f);
+        }
+    }
+
+    /// A fireball from above the top. Most are dropped at random across the
+    /// screen; some are aimed where a boat will be, so they land on it.
+    fn new_fireball(&mut self, width: f32, horizon: f32, progress: f32, rng: &mut Rng) -> Fireball {
+        let scale = fall_scale(progress);
+        let vx = -rng.range_f32(WIND_MIN, WIND_MAX);
+        let vy = FALL_START * scale;
+        let gravity = FALL_GRAVITY * scale;
+        let x = if rng.chance(AIM_CHANCE) {
+            let boat_at = self.aim_at(rng).unwrap_or(width * 0.3);
+            let aim = boat_at + rng.range_f32(-AIM_SPREAD, AIM_SPREAD);
+            // the wind carries it left, so start it as far right as it will drift
+            let fall = fall_time(horizon - FALL_FROM, vy, gravity);
+            aim - vx * fall
+        } else {
+            lerp(0.3 * width, 1.15 * width, rng.f32())
+        };
+        Fireball::new(x, FALL_FROM, vx, vy, gravity)
+    }
+
+    /// Moves every fireball, strikes the first boat each flying one touches,
+    /// and sinks any that reach the water. A fireball that passes close to a
+    /// boat scores once for it.
+    fn fly_fireballs(&mut self, dt: f32, waves: &Waves, water: f32) {
+        let t = self.elapsed;
+        let mut struck = [false; MAX_BOATS];
+        for f in self.fireballs.iter_mut() {
+            match f.stage {
+                Stage::Flying => {
+                    f.fall(dt);
+                    let hit = self.sailors.iter().enumerate().position(|(i, s)| {
+                        s.lives > 0
+                            && t >= s.invulnerable_until
+                            && !struck[i]
+                            && s.boat.hit().overlaps(&f.hit_shape())
+                    });
+                    if let Some(i) = hit {
+                        struck[i] = true;
+                        f.stage = Stage::Spent;
+                        continue;
+                    }
+                    if f.y >= 2.0 * waves.surface_y(f.x, t, water) {
+                        f.stage = Stage::Sinking(0.0);
+                        self.fx.push(Fx::Steamed {
+                            x: f.x,
+                            row: f.y / 2.0,
+                        });
+                    } else if f.x < OFF_LEFT {
+                        f.stage = Stage::Spent;
+                    }
+                    for (i, s) in self.sailors.iter().enumerate() {
+                        let bit = 1u8 << i;
+                        if s.lives == 0 || f.passed & bit != 0 || f.x > s.boat.centre() {
+                            continue;
+                        }
+                        f.passed |= bit;
+                        let (top, bottom) = (s.boat.top(), s.boat.top() + BOAT_HEIGHT);
+                        let gap = gap_to_boat(f.y, top, bottom);
+                        if f.stage == Stage::Flying && gap <= NEAR_PX {
+                            self.bonus += NEAR_BONUS;
+                            self.fx.push(Fx::Near {
+                                x: s.boat.centre(),
+                                y: top / 2.0,
+                            });
+                        }
+                    }
+                }
+                Stage::Sinking(_) => f.sink(dt),
+                Stage::Spent => {}
+            }
+        }
+        for (i, sailor) in self.sailors.iter_mut().enumerate() {
+            if struck[i] {
+                sailor.lives = sailor.lives.saturating_sub(1);
+                sailor.invulnerable_until = t + INVULNERABLE_SECONDS;
+                self.fx.push(Fx::Struck {
+                    x: sailor.boat.centre(),
+                    row: sailor.boat.keel / 2.0 - 1.5,
+                });
+            }
+        }
+        self.fireballs.retain(|f| f.stage != Stage::Spent);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The view: sparks, steam and spray. Looks only, so it has its own random
+// numbers and never changes the rules.
+// ---------------------------------------------------------------------------
+
+struct View {
+    rng: Rng,
     embers: Particles,
     steam: Particles,
     spray: Particles,
     wake: Timer,
     floaters: Pool<Floater>,
-    /// The knobs the page may change while the round runs.
-    tuning: Tuning,
-    /// The wave height knob as the last update read it. The draw uses it too,
-    /// so the boat sits on the waves that are drawn.
-    wave_scale: f32,
+    /// Play time until which the screen flashes after a hit.
+    flash_until: f32,
 }
 
-/// The wave height knob's value, or 1 when no knob is set.
-fn wave_scale_of(tuning: &Tuning) -> f32 {
-    tuning.get("wave_height", 1.0)
-}
-
-impl Play {
-    fn new(seed: u64, best: u32) -> Play {
-        let mut rng = Rng::new(seed);
-        let phase = rng.f32() * TAU;
-        Play {
-            best,
-            look: Look::new(),
-            tuning: Tuning::new(),
-            wave_scale: 1.0,
-            elapsed: 0.0,
-            distance: 0.0,
-            bonus: 0,
-            phase,
-            boat: Boat::new(),
-            rng,
-            controls: controls(),
-            lives: LIVES,
-            // finished from the start, so the boat begins vulnerable
-            invulnerable_until: f32::NEG_INFINITY,
-            flash_until: f32::NEG_INFINITY,
-            fireballs: Pool::with_capacity(FIREBALL_LIMIT),
-            spawn: Timer::every(SPAWN_CALM),
+impl View {
+    fn new(seed: u64) -> View {
+        View {
+            rng: Rng::new(seed ^ 0x5eed_c0de),
             embers: Particles::new(EMBER_LIMIT).gravity(EMBER_RISE).drag(0.5),
             steam: Particles::new(STEAM_LIMIT)
                 .gravity(-6.0)
@@ -1445,218 +1750,48 @@ impl Play {
                 ])),
             wake: Timer::every(WAKE_SECONDS),
             floaters: Pool::with_capacity(FLOATER_LIMIT),
+            flash_until: f32::NEG_INFINITY,
         }
     }
 
-    /// Reads the knobs from `tuning` while the round runs.
-    fn tuned(mut self, tuning: Tuning) -> Play {
-        self.tuning = tuning;
-        self
+    /// Whether the screen is flashing after a hit, at play time `elapsed`.
+    fn flashing(&self, elapsed: f32) -> bool {
+        elapsed < self.flash_until
     }
 
-    /// The score: a point for every tenth of a league sailed, and the bonuses.
-    fn score(&self) -> u32 {
-        ((self.distance * 10.0).floor() as u32).saturating_add(self.bonus)
-    }
-
-    /// Whether the screen is flashing after a hit.
-    fn flashing(&self) -> bool {
-        self.elapsed < self.flash_until
-    }
-
-    /// Sends one fireball, or a volley of two or three, down from above the top.
-    fn launch(&mut self, width: f32, horizon: f32, progress: f32) {
-        let volley = if self.rng.chance(volley_chance(progress)) {
-            2 + self.rng.range_i32(0, 2)
-        } else {
-            1
-        };
-        for _ in 0..volley {
-            let f = self.new_fireball(width, horizon, progress);
-            let _ = self.fireballs.push(f);
-        }
-    }
-
-    /// A fireball from above the top. Most are dropped at random across the
-    /// screen; some are aimed where the boat will be, so they land on it.
-    fn new_fireball(&mut self, width: f32, horizon: f32, progress: f32) -> Fireball {
-        let scale = fall_scale(progress);
-        let vx = -self.rng.range_f32(WIND_MIN, WIND_MAX);
-        let vy = FALL_START * scale;
-        let gravity = FALL_GRAVITY * scale;
-        let x = if self.rng.chance(AIM_CHANCE) {
-            let aim = self.boat.centre() + self.rng.range_f32(-AIM_SPREAD, AIM_SPREAD);
-            // the wind carries it left, so start it as far right as it will drift
-            let fall = fall_time(horizon - FALL_FROM, vy, gravity);
-            aim - vx * fall
-        } else {
-            lerp(0.3 * width, 1.15 * width, self.rng.f32())
-        };
-        Fireball::new(x, FALL_FROM, vx, vy, gravity)
-    }
-
-    /// Moves every fireball, strikes the boat with the first flying one that
-    /// touches it, and sinks any that reach the water. A fireball that passes
-    /// close scores once.
-    fn fly_fireballs(&mut self, dt: f32, waves: &Waves, water: f32) {
-        let t = self.elapsed;
-        let vulnerable = t >= self.invulnerable_until;
-        let hull = self.boat.hit();
-        let centre = self.boat.centre();
-        let (top, bottom) = (self.boat.top(), self.boat.top() + BOAT_HEIGHT);
-        let mut struck = false;
-        for f in self.fireballs.iter_mut() {
-            match f.stage {
-                Stage::Flying => {
-                    f.fall(dt);
-                    if vulnerable && !struck && hull.overlaps(&f.hit_shape()) {
-                        struck = true;
-                        f.stage = Stage::Spent;
-                        continue;
-                    }
-                    if f.y >= 2.0 * waves.surface_y(f.x, t, water) {
-                        f.stage = Stage::Sinking(0.0);
-                        let (x, row) = (f.x, f.y / 2.0);
-                        self.steam
-                            .burst(&mut self.rng, x, row, STEAM_BURST, 6.0, 1.2);
-                        self.spray.burst(&mut self.rng, x, row, DROPLETS, 5.0, 0.6);
-                    } else if f.x < OFF_LEFT {
-                        f.stage = Stage::Spent;
-                    }
-                    if !f.passed && f.x <= centre {
-                        f.passed = true;
-                        let gap = gap_to_boat(f.y, top, bottom);
-                        if f.stage == Stage::Flying && gap <= NEAR_PX {
-                            self.bonus += NEAR_BONUS;
-                            let _ = self.floaters.push(Floater {
-                                x: centre,
-                                y: top / 2.0,
-                                age: 0.0,
-                            });
-                        }
-                    }
-                }
-                Stage::Sinking(_) => f.sink(dt),
-                Stage::Spent => {}
-            }
-        }
-        if struck {
-            self.lives = self.lives.saturating_sub(1);
-            let row = self.boat.keel / 2.0 - 1.5;
-            self.embers.burst(&mut self.rng, centre, row, 40, 14.0, 1.0);
-            self.invulnerable_until = t + INVULNERABLE_SECONDS;
-            self.flash_until = t + FLASH_SECONDS;
-        }
-        self.fireballs.retain(|f| f.stage != Stage::Spent);
-    }
-}
-
-impl Game for Play {
-    fn draw(&self, screen: &mut Screen) {
-        // every value here comes from play time, so a paused game does not move
-        let t = self.elapsed;
-        let water = level(screen.height() as f32);
-        let progress = progress_of(self.distance);
-        let waves = sea_scaled(
-            progress,
-            t,
-            self.phase,
-            screen.height() as f32,
-            self.wave_scale,
-        );
-        let light = daylight(t);
-        let flash = if self.flashing() { 1.0 } else { 0.0 };
-        paint_sky(
-            screen,
-            &self.look.sky,
-            light,
-            flash,
-            t,
-            screen.height() as f32,
-        );
-        paint_stars(screen, night(light), t, (water - 4.0) * 2.0);
-        paint_celestial(screen, &self.look, t, &waves, t, water);
-        paint_sea(screen, &self.look.sea, &waves, t, water);
-        paint_island(screen, &self.look, self.distance, &waves, t, water);
-        self.steam.draw(screen);
-        self.embers.draw(screen);
-        self.spray.draw(screen);
-        for f in self.fireballs.iter() {
-            draw_fireball(screen, &self.look, f);
-        }
-        for floater in self.floaters.iter() {
-            let colour = if floater.age < 0.4 {
-                Colour::BrightYellow
-            } else {
-                Colour::Yellow
-            };
-            let x = floater.x.round() as i32 - 1;
-            screen.text(x, floater.y.round() as i32, "+5", colour);
-        }
-        if boat_visible(t, self.invulnerable_until) {
-            let centre = self.boat.centre();
-            let tilt = waves.tilt(centre, t);
-            draw_boat(screen, &self.look, self.boat.x, self.boat.keel, tilt);
-        }
-        let hud = Hud {
-            tenths: (self.distance * 10.0).floor() as u32,
-            score: self.score(),
-            best: self.best,
-            lives: self.lives,
-            time: time_of_day(t),
-        };
-        draw_hud(screen, &hud);
-    }
-
-    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
-        // checked before anything moves, so a paused round stands still
-        if self.controls.pressed(ctx.keys, Action::Pause) {
-            return Next::push(Paused);
-        }
-        if ctx.keys.pressed(KeyCode::Char('q')) {
-            return Next::quit();
-        }
-        let dt = ctx.dt;
-        let (width, rows) = (ctx.size.0 as f32, ctx.size.1 as f32);
-        let water = level(rows);
-        self.wave_scale = wave_scale_of(&self.tuning);
-        let boat_speed = self.tuning.get("boat_speed", 1.0);
-        let fireball_rate = self.tuning.get("fireball_rate", 1.0);
-        self.elapsed += dt;
-        self.distance += sail_speed(progress_of(self.distance)) * dt;
-        let progress = progress_of(self.distance);
-        let t = self.elapsed;
-        let waves = sea_scaled(progress, t, self.phase, rows, self.wave_scale);
-
-        self.boat.place(width, |x| keel_under(&waves, x, t, water));
-        let across = self.controls.axis(ctx.keys, Action::Left, Action::Right) as f32;
-        self.boat.steer(
-            across * SAIL_SPEED * boat_speed,
-            dt,
-            width * 0.2,
-            width * 0.6,
-        );
-        let target = keel_under(&waves, self.boat.centre(), t, water);
-        self.boat.settle(target, dt);
-
-        // the boat always sails forward, so it always leaves a wake behind its stern
+    /// Moves the effects on by one update of `sim`, and reacts to what just
+    /// happened in it.
+    fn observe(&mut self, sim: &SailSim) {
+        let dt = STEP;
+        // the boats always sail forward, so each leaves a wake behind its stern
         if self.wake.tick(dt) {
-            let (x, row) = (self.boat.x, self.boat.keel / 2.0);
-            self.spray.emit(x, row, -2.0, -1.5, 0.5);
+            for s in sim.sailors.iter().filter(|s| s.lives > 0) {
+                self.spray
+                    .emit(s.boat.x, s.boat.keel / 2.0, -2.0, -1.5, 0.5);
+            }
         }
         self.spray.step(dt);
         self.steam.step(dt);
         self.embers.step(dt);
 
-        self.spawn
-            .set_seconds(spawn_interval(progress) / fireball_rate);
-        let horizon = 2.0 * water;
-        for _ in 0..self.spawn.ticks(dt) {
-            self.launch(width, horizon, progress);
+        for fx in &sim.fx {
+            match *fx {
+                Fx::Struck { x, row } => {
+                    self.embers.burst(&mut self.rng, x, row, 40, 14.0, 1.0);
+                    self.flash_until = sim.elapsed + FLASH_SECONDS;
+                }
+                Fx::Steamed { x, row } => {
+                    self.steam
+                        .burst(&mut self.rng, x, row, STEAM_BURST, 6.0, 1.2);
+                    self.spray.burst(&mut self.rng, x, row, DROPLETS, 5.0, 0.6);
+                }
+                Fx::Near { x, y } => {
+                    let _ = self.floaters.push(Floater { x, y, age: 0.0 });
+                }
+            }
         }
-        self.fly_fireballs(dt, &waves, water);
         // every fireball that is still flying leaves embers behind it
-        for f in self.fireballs.iter() {
+        for f in sim.fireballs.iter() {
             if f.stage != Stage::Flying {
                 continue;
             }
@@ -1671,10 +1806,148 @@ impl Game for Play {
             floater.age += dt;
         }
         self.floaters.retain(|floater| floater.age < FLOATER_LIFE);
-        if self.lives == 0 {
+    }
+}
+
+/// The wave height knob's value, or 1 when no knob is set.
+fn wave_scale_of(tuning: &Tuning) -> f32 {
+    tuning.get("wave_height", 1.0)
+}
+
+/// Draws a round for the player `me`: sky, sea, boats, fireballs, effects, HUD.
+/// Every value here comes from play time, so a paused game does not move.
+fn draw_round(screen: &mut Screen, look: &Look, sim: &SailSim, view: &View, me: usize, best: u32) {
+    let t = sim.elapsed;
+    let water = level(screen.height() as f32);
+    let progress = progress_of(sim.distance);
+    let waves = sea_scaled(
+        progress,
+        t,
+        sim.phase,
+        screen.height() as f32,
+        sim.env.wave_scale,
+    );
+    let light = daylight(t);
+    let flash = if view.flashing(t) { 1.0 } else { 0.0 };
+    paint_sky(screen, &look.sky, light, flash, t, screen.height() as f32);
+    paint_stars(screen, night(light), t, (water - 4.0) * 2.0);
+    paint_celestial(screen, look, t, &waves, t, water);
+    paint_sea(screen, &look.sea, &waves, t, water);
+    paint_island(screen, look, sim.distance, &waves, t, water);
+    view.steam.draw(screen);
+    view.embers.draw(screen);
+    view.spray.draw(screen);
+    for f in sim.fireballs.iter() {
+        draw_fireball(screen, look, f);
+    }
+    for floater in view.floaters.iter() {
+        let colour = if floater.age < 0.4 {
+            Colour::BrightYellow
+        } else {
+            Colour::Yellow
+        };
+        let x = floater.x.round() as i32 - 1;
+        screen.text(x, floater.y.round() as i32, "+5", colour);
+    }
+    // the other players' boats first, so your own is always on top
+    for (_, s) in sim.sailors.iter().enumerate().filter(|(i, _)| *i != me) {
+        if s.lives > 0 && boat_visible(t, s.invulnerable_until) {
+            let tilt = waves.tilt(s.boat.centre(), t);
+            draw_boat(screen, &look.rivals, s.boat.x, s.boat.keel, tilt);
+        }
+    }
+    if let Some(mine) = sim.sailors.get(me) {
+        if mine.lives > 0 && boat_visible(t, mine.invulnerable_until) {
+            let tilt = waves.tilt(mine.boat.centre(), t);
+            draw_boat(screen, &look.boats, mine.boat.x, mine.boat.keel, tilt);
+        }
+    }
+    let mut lives = [0; MAX_BOATS];
+    for (slot, s) in lives.iter_mut().zip(&sim.sailors) {
+        *slot = s.lives;
+    }
+    let hud = Hud {
+        tenths: (sim.distance * 10.0).floor() as u32,
+        score: sim.score(),
+        best,
+        lives,
+        players: sim.sailors.len(),
+        me,
+        time: time_of_day(t),
+    };
+    draw_hud(screen, &hud);
+}
+
+/// A solo round: one boat, steered by the keys, on this machine.
+struct Play {
+    best: u32,
+    look: Look,
+    sim: SailSim,
+    /// The sim's random numbers.
+    rng: Rng,
+    view: View,
+    controls: Controls<Action>,
+    /// The knobs the page may change while the round runs.
+    tuning: Tuning,
+}
+
+impl Play {
+    fn new(seed: u64, best: u32) -> Play {
+        let mut rng = Rng::new(seed);
+        let sim = SailSim::new(1, Env::new((80, 24)), &mut rng);
+        Play {
+            best,
+            look: Look::new(),
+            tuning: Tuning::new(),
+            sim,
+            rng,
+            view: View::new(seed),
+            controls: controls(),
+        }
+    }
+
+    /// Reads the knobs from `tuning` while the round runs.
+    fn tuned(mut self, tuning: Tuning) -> Play {
+        self.tuning = tuning;
+        self
+    }
+
+    fn score(&self) -> u32 {
+        self.sim.score()
+    }
+}
+
+impl Game for Play {
+    fn draw(&self, screen: &mut Screen) {
+        draw_round(screen, &self.look, &self.sim, &self.view, 0, self.best);
+    }
+
+    fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+        // checked before anything moves, so a paused round stands still
+        if self.controls.pressed(ctx.keys, Action::Pause) {
+            return Next::push(Paused);
+        }
+        if ctx.keys.pressed(KeyCode::Char('q')) {
+            return Next::quit();
+        }
+        self.sim.env = Env::tuned(ctx.size, &self.tuning);
+        let across = self.controls.axis(ctx.keys, Action::Left, Action::Right);
+        self.sim.step(&[Steer(across as i8)], &mut self.rng);
+        self.view.observe(&self.sim);
+        if self.sim.over() {
             let best = self.best.max(self.score());
-            let over = Over::new(self.score(), best, t, progress, self.phase);
-            return Next::switch(over.tuned(self.tuning.clone()).waves_at(self.wave_scale));
+            let progress = progress_of(self.sim.distance);
+            let over = Over::new(
+                self.score(),
+                best,
+                self.sim.elapsed,
+                progress,
+                self.sim.phase,
+            );
+            return Next::switch(
+                over.tuned(self.tuning.clone())
+                    .waves_at(self.sim.env.wave_scale),
+            );
         }
         Next::stay()
     }
@@ -1747,15 +2020,20 @@ mod tests {
 
     /// The sea as the game has it right now.
     fn waves_now(play: &Play, rows: f32) -> Waves {
-        sea(progress_of(play.distance), play.elapsed, play.phase, rows)
+        sea(
+            progress_of(play.sim.distance),
+            play.sim.elapsed,
+            play.sim.phase,
+            rows,
+        )
     }
 
     /// The keel row the water asks for under the boat's middle, now.
     fn keel_wanted(play: &Play, rows: f32) -> f32 {
         keel_under(
             &waves_now(play, rows),
-            play.boat.centre(),
-            play.elapsed,
+            play.sim.sailors[0].boat.centre(),
+            play.sim.elapsed,
             level(rows),
         )
     }
@@ -1763,7 +2041,7 @@ mod tests {
     /// A play with no random fireballs, so a test can place its own.
     fn quiet(seed: u64) -> Play {
         let mut play = Play::new(seed, 0);
-        play.spawn = Timer::every(1000.0);
+        play.sim.launching = false;
         play
     }
 
@@ -1799,7 +2077,7 @@ mod tests {
             rig.press(code);
             rig.update(&mut play);
             rig.release(code);
-            let gap = (play.boat.keel - keel_wanted(&play, 24.0)).abs();
+            let gap = (play.sim.sailors[0].boat.keel - keel_wanted(&play, 24.0)).abs();
             assert!(
                 gap < 2.0,
                 "{code:?} must not lift the boat: {gap} pixels off"
@@ -1814,24 +2092,24 @@ mod tests {
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
         assert!(
-            (play.boat.x - 24.0).abs() < 0.01,
+            (play.sim.sailors[0].boat.x - 24.0).abs() < 0.01,
             "a third of the way across: {}",
-            play.boat.x
+            play.sim.sailors[0].boat.x
         );
         rig.press(KeyCode::Right);
         rig.run(&mut play, 600);
         assert!(
-            (play.boat.x - 48.0).abs() < 0.01,
+            (play.sim.sailors[0].boat.x - 48.0).abs() < 0.01,
             "stopped at 0.6 of 80: {}",
-            play.boat.x
+            play.sim.sailors[0].boat.x
         );
         rig.release(KeyCode::Right);
         rig.press(KeyCode::Left);
         rig.run(&mut play, 600);
         assert!(
-            (play.boat.x - 16.0).abs() < 0.01,
+            (play.sim.sailors[0].boat.x - 16.0).abs() < 0.01,
             "stopped at 0.2 of 80: {}",
-            play.boat.x
+            play.sim.sailors[0].boat.x
         );
     }
 
@@ -1840,13 +2118,14 @@ mod tests {
         // at the roughest sea the swell is several pixels high, so a boat that
         // ignored the water would be far off it; the boat must keep up
         let mut play = Play::new(1, 0);
-        play.distance = DISTANCE_MAX;
+        play.sim.launching = false; // a hit would end the round and park the boat
+        play.sim.distance = DISTANCE_MAX;
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 300);
         let mut worst = 0.0_f32;
         for _ in 0..600 {
             rig.update(&mut play);
-            worst = worst.max((play.boat.keel - keel_wanted(&play, 24.0)).abs());
+            worst = worst.max((play.sim.sailors[0].boat.keel - keel_wanted(&play, 24.0)).abs());
         }
         // the spring trails the fastest swells by up to two pixels; a boat that
         // ignored the water is more than eight pixels off it at the storm
@@ -1862,9 +2141,9 @@ mod tests {
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 60);
         assert!(
-            (0.99..1.03).contains(&play.distance),
+            (0.99..1.03).contains(&play.sim.distance),
             "one league in the first second: {}",
-            play.distance
+            play.sim.distance
         );
     }
 
@@ -1939,12 +2218,12 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        play.launch(80.0, 30.0, 0.0);
-        let f = *play.fireballs.get(0).expect("one fireball");
+        play.sim.launch(80.0, 30.0, 0.0, &mut play.rng);
+        let f = *play.sim.fireballs.get(0).expect("one fireball");
         assert!(f.y < 0.0, "it starts above the top: {}", f.y);
         assert!((-10.2..=-3.4).contains(&f.vx), "wind to the left: {}", f.vx);
         rig.run(&mut play, 30);
-        let later = *play.fireballs.get(0).expect("still in the air");
+        let later = *play.sim.fireballs.get(0).expect("still in the air");
         assert!(later.y > f.y, "it falls: {} then {}", f.y, later.y);
         assert!(later.x < f.x, "it drifts left");
     }
@@ -1987,13 +2266,14 @@ mod tests {
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
         let x = 60.0;
-        let water = 2.0 * waves_now(&play, 24.0).surface_y(x, play.elapsed, level(24.0));
+        let water = 2.0 * waves_now(&play, 24.0).surface_y(x, play.sim.elapsed, level(24.0));
         assert!(play
+            .sim
             .fireballs
             .push(Fireball::new(x, water + 0.5, -6.0, 0.0, 0.0))
             .is_ok());
         rig.update(&mut play);
-        let f = *play.fireballs.get(0).expect("it is still there");
+        let f = *play.sim.fireballs.get(0).expect("it is still there");
         assert!(matches!(f.stage, Stage::Sinking(_)), "{:?}", f.stage);
     }
 
@@ -2003,16 +2283,18 @@ mod tests {
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
         assert!(play
+            .sim
             .fireballs
             .push(Fireball::new(60.0, 40.0, -6.0, 0.0, 0.0))
             .is_ok());
-        play.fireballs
+        play.sim
+            .fireballs
             .iter_mut()
             .for_each(|f| f.stage = Stage::Sinking(0.0));
         rig.run(&mut play, 60); // one second in
-        assert_eq!(play.fireballs.len(), 1, "still sinking at 1 s");
+        assert_eq!(play.sim.fireballs.len(), 1, "still sinking at 1 s");
         rig.run(&mut play, 20); // 1.33 s in
-        assert!(play.fireballs.is_empty(), "gone after 1.2 s");
+        assert!(play.sim.fireballs.is_empty(), "gone after 1.2 s");
     }
 
     #[test]
@@ -2020,12 +2302,15 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         let mut f = Fireball::new(boat.centre(), boat.top() + 3.0, 0.0, 0.0, 0.0);
         f.stage = Stage::Sinking(0.0);
-        assert!(play.fireballs.push(f).is_ok());
+        assert!(play.sim.fireballs.push(f).is_ok());
         rig.update(&mut play);
-        assert_eq!(play.lives, LIVES, "the sinking one does nothing");
+        assert_eq!(
+            play.sim.sailors[0].lives, LIVES,
+            "the sinking one does nothing"
+        );
     }
 
     #[test]
@@ -2055,16 +2340,17 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let water = 2.0 * waves_now(&play, 24.0).surface_y(60.0, play.elapsed, level(24.0));
+        let water = 2.0 * waves_now(&play, 24.0).surface_y(60.0, play.sim.elapsed, level(24.0));
         assert!(play
+            .sim
             .fireballs
             .push(Fireball::new(60.0, water + 0.5, -6.0, 0.0, 0.0))
             .is_ok());
         rig.update(&mut play);
         assert!(
-            play.steam.len() >= STEAM_BURST,
+            play.view.steam.len() >= STEAM_BURST,
             "steam: {}",
-            play.steam.len()
+            play.view.steam.len()
         );
     }
 
@@ -2073,13 +2359,13 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         let hit = Fireball::new(boat.centre(), boat.top() + 3.0, 0.0, 0.0, 0.0);
-        assert!(play.fireballs.push(hit).is_ok());
+        assert!(play.sim.fireballs.push(hit).is_ok());
         rig.update(&mut play);
-        assert_eq!(play.lives, LIVES - 1, "one life lost");
-        assert!(play.fireballs.is_empty(), "the one that hit is gone");
-        assert_eq!(play.embers.len(), 40, "the explosion");
+        assert_eq!(play.sim.sailors[0].lives, LIVES - 1, "one life lost");
+        assert!(play.sim.fireballs.is_empty(), "the one that hit is gone");
+        assert_eq!(play.view.embers.len(), 40, "the explosion");
     }
 
     #[test]
@@ -2087,23 +2373,23 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         let hit = |y: f32| Fireball::new(boat.centre(), y, 0.0, 0.0, 0.0);
-        assert!(play.fireballs.push(hit(boat.top() + 3.0)).is_ok());
+        assert!(play.sim.fireballs.push(hit(boat.top() + 3.0)).is_ok());
         rig.update(&mut play);
-        assert_eq!(play.lives, LIVES - 1);
-        assert!(play.fireballs.push(hit(boat.top() + 3.0)).is_ok());
+        assert_eq!(play.sim.sailors[0].lives, LIVES - 1);
+        assert!(play.sim.fireballs.push(hit(boat.top() + 3.0)).is_ok());
         rig.update(&mut play);
         assert_eq!(
-            play.lives,
+            play.sim.sailors[0].lives,
             LIVES - 1,
             "invulnerable: the second hit does nothing"
         );
         rig.run(&mut play, 92); // a little over 1.5 seconds after the first hit
-        play.fireballs.clear();
-        assert!(play.fireballs.push(hit(boat.top() + 3.0)).is_ok());
+        play.sim.fireballs.clear();
+        assert!(play.sim.fireballs.push(hit(boat.top() + 3.0)).is_ok());
         rig.update(&mut play);
-        assert_eq!(play.lives, LIVES - 2, "vulnerable again");
+        assert_eq!(play.sim.sailors[0].lives, LIVES - 2, "vulnerable again");
     }
 
     #[test]
@@ -2111,14 +2397,14 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         let mut outcomes = Vec::new();
         for _ in 0..3 {
             let hit = Fireball::new(boat.centre(), boat.top() + 3.0, 0.0, 0.0, 0.0);
-            assert!(play.fireballs.push(hit).is_ok());
+            assert!(play.sim.fireballs.push(hit).is_ok());
             outcomes.push(rig.update(&mut play));
             rig.run(&mut play, 92);
-            play.fireballs.clear();
+            play.sim.fireballs.clear();
         }
         assert!(matches!(outcomes[0], Next::Stay), "the first hit");
         assert!(matches!(outcomes[1], Next::Stay), "the second hit");
@@ -2126,7 +2412,7 @@ mod tests {
             matches!(outcomes[2], Next::Switch(_)),
             "the third ends the round"
         );
-        assert_eq!(play.lives, 0);
+        assert_eq!(play.sim.sailors[0].lives, 0);
     }
 
     #[test]
@@ -2134,15 +2420,15 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         let close = Fireball::new(boat.centre() + 0.3, boat.top() - 4.0, -25.0, 0.0, 0.0);
-        assert!(play.fireballs.push(close).is_ok());
+        assert!(play.sim.fireballs.push(close).is_ok());
         rig.update(&mut play);
-        assert_eq!(play.lives, LIVES, "a miss is not a hit");
-        assert_eq!(play.bonus, NEAR_BONUS, "the bonus for passing close");
-        assert_eq!(play.floaters.len(), 1, "and a +5 floats up");
+        assert_eq!(play.sim.sailors[0].lives, LIVES, "a miss is not a hit");
+        assert_eq!(play.sim.bonus, NEAR_BONUS, "the bonus for passing close");
+        assert_eq!(play.view.floaters.len(), 1, "and a +5 floats up");
         rig.run(&mut play, 10);
-        assert_eq!(play.bonus, NEAR_BONUS, "no second bonus");
+        assert_eq!(play.sim.bonus, NEAR_BONUS, "no second bonus");
     }
 
     #[test]
@@ -2162,8 +2448,9 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        let boat = play.boat;
+        let boat = play.sim.sailors[0].boat;
         assert!(play
+            .sim
             .fireballs
             .push(Fireball::new(
                 boat.centre(),
@@ -2174,11 +2461,11 @@ mod tests {
             ))
             .is_ok());
         rig.update(&mut play);
-        assert!(play.flashing(), "the hit flashes");
+        assert!(play.view.flashing(play.sim.elapsed), "the hit flashes");
         rig.run(&mut play, 5);
-        assert!(play.flashing(), "still flashing");
+        assert!(play.view.flashing(play.sim.elapsed), "still flashing");
         rig.run(&mut play, 6);
-        assert!(!play.flashing(), "the flash is over");
+        assert!(!play.view.flashing(play.sim.elapsed), "the flash is over");
     }
 
     #[test]
@@ -2216,18 +2503,21 @@ mod tests {
             }
             rig.update(&mut play);
             assert!(
-                play.fireballs.len() <= FIREBALL_LIMIT,
+                play.sim.fireballs.len() <= FIREBALL_LIMIT,
                 "fireballs at {tick}"
             );
-            assert!(play.floaters.len() <= FLOATER_LIMIT, "floaters at {tick}");
-            assert!(play.embers.len() <= EMBER_LIMIT, "embers at {tick}");
-            assert!(play.steam.len() <= STEAM_LIMIT, "steam at {tick}");
-            assert!(play.spray.len() <= SPRAY_LIMIT, "spray at {tick}");
-            most_fireballs = most_fireballs.max(play.fireballs.len());
-            most_embers = most_embers.max(play.embers.len());
-            if play.lives < lives {
+            assert!(
+                play.view.floaters.len() <= FLOATER_LIMIT,
+                "floaters at {tick}"
+            );
+            assert!(play.view.embers.len() <= EMBER_LIMIT, "embers at {tick}");
+            assert!(play.view.steam.len() <= STEAM_LIMIT, "steam at {tick}");
+            assert!(play.view.spray.len() <= SPRAY_LIMIT, "spray at {tick}");
+            most_fireballs = most_fireballs.max(play.sim.fireballs.len());
+            most_embers = most_embers.max(play.view.embers.len());
+            if play.sim.sailors[0].lives < lives {
                 hits += 1;
-                lives = play.lives;
+                lives = play.sim.sailors[0].lives;
             }
         }
         assert!(most_fireballs > 0, "fireballs came in");
@@ -2243,7 +2533,11 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 60);
-        assert!(play.spray.len() >= 2, "a wake: {}", play.spray.len());
+        assert!(
+            play.view.spray.len() >= 2,
+            "a wake: {}",
+            play.view.spray.len()
+        );
     }
 
     #[test]
@@ -2260,12 +2554,12 @@ mod tests {
         let mut play = Play::new(1, 0);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 30);
-        let before = (play.elapsed, play.distance);
+        let before = (play.sim.elapsed, play.sim.distance);
         rig.press(KeyCode::Char('p'));
         let next = rig.update(&mut play);
         assert!(matches!(next, Next::Push(_)), "p pushes the pause screen");
         assert_eq!(
-            (play.elapsed, play.distance),
+            (play.sim.elapsed, play.sim.distance),
             before,
             "the pausing update moves nothing"
         );
@@ -2463,14 +2757,14 @@ mod tests {
     #[test]
     fn the_sun_is_a_yellow_disc_at_noon_and_the_moon_takes_its_place_at_midnight() {
         let mut play = Play::new(1, 0);
-        play.elapsed = 30.0;
+        play.sim.elapsed = 30.0;
         let noon = frame(&play, 80, 24);
         assert_eq!(
             sky_middle(&noon),
             Colour::BrightYellow,
             "the sun is drawn at noon"
         );
-        play.elapsed = 90.0;
+        play.sim.elapsed = 90.0;
         let midnight = frame(&play, 80, 24);
         assert_eq!(
             sky_middle(&midnight),
@@ -2484,7 +2778,7 @@ mod tests {
         assert!(moon_arc(90.0).is_some(), "the moon rises at night");
         assert!(moon_arc(30.0).is_none(), "and is down at noon");
         let mut play = Play::new(1, 0);
-        play.elapsed = 30.0;
+        play.sim.elapsed = 30.0;
         let noon = frame(&play, 80, 24);
         assert_ne!(sky_middle(&noon), Colour::BrightWhite, "no moon at noon");
     }
@@ -2524,10 +2818,10 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 60);
-        play.elapsed = 30.0;
+        play.sim.elapsed = 30.0;
         let screen = frame(&play, 80, 24);
-        let x = play.boat.centre().round() as isize;
-        let row = (play.boat.keel / 2.0).round() as isize;
+        let x = play.sim.sailors[0].boat.centre().round() as isize;
+        let row = (play.sim.sailors[0].boat.keel / 2.0).round() as isize;
         let boat_colours = [Colour::BrightWhite, Colour::Red, Colour::Yellow];
         let cell = screen.display().pixel(x, row).unwrap();
         assert!(
@@ -2584,6 +2878,7 @@ mod tests {
     fn a_fireball_is_drawn_where_it_is() {
         let mut play = quiet(1);
         assert!(play
+            .sim
             .fireballs
             .push(Fireball::new(30.0, 10.0, -6.0, 0.0, 0.0))
             .is_ok());
@@ -2600,7 +2895,7 @@ mod tests {
         let mut play = quiet(1);
         let mut f = Fireball::new(30.0, 20.0, 0.0, 0.0, 0.0);
         f.stage = Stage::Sinking(SINK_SECONDS * 0.7);
-        assert!(play.fireballs.push(f).is_ok());
+        assert!(play.sim.fireballs.push(f).is_ok());
         let screen = frame(&play, 80, 24);
         let grey_or_blue = |c: Colour| {
             matches!(
@@ -2639,7 +2934,7 @@ mod tests {
     #[test]
     fn distance_is_shown_as_leagues_with_one_decimal() {
         let mut play = Play::new(1, 0);
-        play.distance = 12.4;
+        play.sim.distance = 12.4;
         let mut screen = Screen::new(80, 24);
         play.draw(&mut screen);
         let row: String = (0..80)
@@ -2651,7 +2946,7 @@ mod tests {
     #[test]
     fn a_lost_life_is_a_grey_heart_and_a_kept_life_is_red() {
         let mut play = Play::new(1, 0);
-        play.lives = 1;
+        play.sim.sailors[0].lives = 1;
         let mut screen = Screen::new(80, 24);
         play.draw(&mut screen);
         let first = screen.display().pixel(74, 0).unwrap();
@@ -2814,14 +3109,14 @@ mod tests {
     /// columns wide so that no edge stops it. Before this change it was 18.
     fn boat_top_speed() -> f32 {
         let mut play = Play::new(1, 0);
-        play.spawn = Timer::every(1000.0);
+        play.sim.launching = false;
         let mut rig = Rig::new((400, 24));
         rig.run(&mut play, 1);
         rig.press(KeyCode::Right);
         let mut top = 0.0_f32;
         for _ in 0..180 {
             rig.update(&mut play);
-            top = top.max(play.boat.vx);
+            top = top.max(play.sim.sailors[0].boat.vx);
         }
         top
     }
@@ -2839,20 +3134,20 @@ mod tests {
     /// the right. It was 2.017 seconds before the boat was made faster.
     fn crossing_seconds() -> f32 {
         let mut play = Play::new(1, 0);
-        play.spawn = Timer::every(1000.0);
+        play.sim.launching = false;
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
         rig.press(KeyCode::Left);
         rig.run(&mut play, 600);
         rig.release(KeyCode::Left);
         assert!(
-            (play.boat.x - 16.0).abs() < 0.01,
+            (play.sim.sailors[0].boat.x - 16.0).abs() < 0.01,
             "parked at 0.2: {}",
-            play.boat.x
+            play.sim.sailors[0].boat.x
         );
         rig.press(KeyCode::Right);
         let mut ticks = 0;
-        while play.boat.x < 48.0 - 1e-3 && ticks < 3000 {
+        while play.sim.sailors[0].boat.x < 48.0 - 1e-3 && ticks < 3000 {
             rig.update(&mut play);
             ticks += 1;
         }
@@ -3021,13 +3316,13 @@ mod tests {
     fn no_black_gap_shows_in_the_sky_above_a_trough_at_noon_in_the_roughest_sea() {
         // the troughs swell and die down, so look at a stretch of the bright middle of the day
         let mut play = Play::new(1, 0);
-        play.distance = DISTANCE_MAX;
+        play.sim.distance = DISTANCE_MAX;
         let water = level(24.0);
         for k in 0..80 {
             let t = 20.0 + k as f32 * 0.25;
-            play.elapsed = t;
+            play.sim.elapsed = t;
             let screen = frame(&play, 80, 24);
-            let waves = sea(1.0, t, play.phase, 24.0);
+            let waves = sea(1.0, t, play.sim.phase, 24.0);
             for x in 0..80 {
                 let surface = waves.surface_y(x as f32, t, water);
                 for row in 1..24 {
@@ -3101,10 +3396,10 @@ mod tests {
         assert_eq!(
             seen,
             [
-                224780072967576524,
-                11642410558734743304,
-                2261116509746972382,
-                1957015234349892516
+                18329081847994442042,
+                16797105654941453651,
+                17474861275096509298,
+                10541715977374162731
             ]
         );
     }
@@ -3157,7 +3452,7 @@ mod tests {
             let mut play = Play::new(1, 0).tuned(knobs);
             let mut rig = Rig::new((80, 24));
             rig.run(&mut play, 900);
-            play.fireballs.len()
+            play.sim.fireballs.len()
         }
         let high = in_the_air_after_900_ticks(3.0);
         let low = in_the_air_after_900_ticks(0.2);
@@ -3197,10 +3492,10 @@ mod tests {
         let mut play = Play::new(1, 0).tuned(knobs.clone());
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 1);
-        assert_eq!(play.wave_scale, 0.0);
+        assert_eq!(play.sim.env.wave_scale, 0.0);
         knobs.set("wave_height", 2.0);
         rig.run(&mut play, 1);
-        assert_eq!(play.wave_scale, 2.0);
+        assert_eq!(play.sim.env.wave_scale, 2.0);
     }
 
     #[test]
@@ -3208,7 +3503,7 @@ mod tests {
         let knobs = tuning();
         knobs.set("wave_height", 0.0);
         let mut play = Play::new(1, 0).tuned(knobs);
-        play.spawn = Timer::every(1000.0);
+        play.sim.launching = false;
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 300);
         assert!(deep_water_is_flat(&painted(&play, 80, 24)), "flat when 0");
@@ -3219,9 +3514,9 @@ mod tests {
         let mut play = quiet(1);
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 300);
-        play.wave_scale = 0.0;
+        play.sim.env.wave_scale = 0.0;
         let flat = cells_of(&painted(&play, 80, 24));
-        play.wave_scale = 2.0;
+        play.sim.env.wave_scale = 2.0;
         let high = cells_of(&painted(&play, 80, 24));
         assert_ne!(flat, high, "the picture ignored the wave height");
     }
@@ -3238,13 +3533,13 @@ mod tests {
             let knobs = tuning();
             knobs.set("boat_speed", speed);
             let mut play = Play::new(1, 0).tuned(knobs);
-            play.spawn = Timer::every(1000.0);
+            play.sim.launching = false;
             let mut rig = Rig::new((80, 24));
             rig.run(&mut play, 1);
-            let before = play.boat.x;
+            let before = play.sim.sailors[0].boat.x;
             rig.press(KeyCode::Right);
             rig.run(&mut play, 30);
-            play.boat.x - before
+            play.sim.sailors[0].boat.x - before
         }
         let normal = sailed_in_thirty_steps(1.0);
         let fast = sailed_in_thirty_steps(2.0);
@@ -3256,7 +3551,7 @@ mod tests {
         fn sailed_in_the_last_thirty(change_to: Option<f32>) -> f32 {
             let knobs = tuning();
             let mut play = Play::new(1, 0).tuned(knobs.clone());
-            play.spawn = Timer::every(1000.0);
+            play.sim.launching = false;
             let mut rig = Rig::new((400, 24));
             rig.run(&mut play, 1);
             rig.press(KeyCode::Right);
@@ -3264,9 +3559,9 @@ mod tests {
             if let Some(speed) = change_to {
                 knobs.set("boat_speed", speed);
             }
-            let before = play.boat.x;
+            let before = play.sim.sailors[0].boat.x;
             rig.run(&mut play, 30);
-            play.boat.x - before
+            play.sim.sailors[0].boat.x - before
         }
         let unchanged = sailed_in_the_last_thirty(None);
         let changed = sailed_in_the_last_thirty(Some(2.0));
@@ -3317,15 +3612,15 @@ mod tests {
         let knobs = tuning();
         knobs.set("wave_height", 0.0);
         let mut play = Play::new(1, 0).tuned(knobs);
-        play.distance = DISTANCE_MAX;
-        play.spawn = Timer::every(1000.0);
+        play.sim.distance = DISTANCE_MAX;
+        play.sim.launching = false;
         let mut rig = Rig::new((80, 24));
         rig.run(&mut play, 600);
         let flat_keel = 2.0 * level(24.0) + 1.0;
         assert!(
-            (play.boat.keel - flat_keel).abs() < 0.5,
+            (play.sim.sailors[0].boat.keel - flat_keel).abs() < 0.5,
             "keel {} should sit at the flat water {flat_keel}",
-            play.boat.keel
+            play.sim.sailors[0].boat.keel
         );
     }
 
@@ -3333,8 +3628,8 @@ mod tests {
     fn a_settled_boat_keeps_its_keel_on_the_screen_in_the_roughest_sea() {
         for rows in [20_u32, 24, 40] {
             let mut play = Play::new(1, 0);
-            play.distance = DISTANCE_MAX;
-            play.spawn = Timer::every(1000.0);
+            play.sim.distance = DISTANCE_MAX;
+            play.sim.launching = false;
             let mut rig = Rig::new((80, rows));
             rig.run(&mut play, 600);
             // fifty seconds of sailing to and fro, so the boat meets the troughs of many columns
@@ -3350,9 +3645,9 @@ mod tests {
                 }
                 rig.update(&mut play);
                 assert!(
-                    play.boat.keel < 2.0 * rows as f32,
+                    play.sim.sailors[0].boat.keel < 2.0 * rows as f32,
                     "{rows} rows: the keel is at pixel {} of {}",
-                    play.boat.keel,
+                    play.sim.sailors[0].boat.keel,
                     2 * rows
                 );
             }
