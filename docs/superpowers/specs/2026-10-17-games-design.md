@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases 1 to 5 are built. Phase 6 (multiplayer) is not.
+Phases 1 to 6 are built, except the parts of phase 6 listed under "Not done yet".
 
 - **Phase 1, built:** a shared fixed timestep clock (`clock::FixedStep`, used by the game loop and by the art stage) and a diffing `Renderer` behind `Terminal::draw`, with a benchmark and its numbers in the README.
 - **Phase 2, built:** key release events from the kitty keyboard protocol, `Keys` (held, pressed and released; timed where the terminal sends no releases) and `Controls` (named actions that can be rebound).
@@ -15,9 +15,11 @@ Phases 1 to 5 are built. Phase 6 (multiplayer) is not.
 - **Phase 4, built:** `Screen::backdrop(_in)`, `Waves`, `Particles`, the pixel layer and the flagship `sail`.
 - **Phase 5, built:** the site is three pages (landing at `/`, art at `/art/`, games at `/games/`). `examples/web_games.rs` is a second WebAssembly module that drives `glow`, `sail` and `quickgame` through `Headless` (fixed 60 Hz steps from `tick(ms)`, key down and up, pointer). The games page has the gallery, touch buttons (left, right, up, down, enter, pause), the real source beside the game, a "make your own" section and a tuner. The tuner uses `game::Tuning`: a plain hook (`tuning.get(name, fallback)`) that games read, no interpreter. `check_site` loads all three pages in a headless browser. No person has looked at the pages in a real browser yet.
 
+- **Phase 6, built (lockstep over TCP):** `Sim` (with `Input: Encode + Decode + Clone + Default` and a required `hash`; both are additions to the sketch above), `Encode`/`Decode`/`Reader`/`Hasher`, `PlayerId`/`PeerId` and `Context::players`/`me`, `Transport` with `Local` and `Tcp` (a star around the host), `Lockstep` (input delay, resent input window, stall, bounded catch-up, checkpoint hashes that name the last agreed step, lost players), `announce`/`await_message`, `Screen::blit`, `game::math::{sin, cos, exp}` (the `f32` methods can differ between machines), and `sail_together`. `sail` was split into `SailSim` and a `View`. Decisions made with the owner: convert `sail` directly; the size of the sea is fixed at the start by the host and a larger window shows it letterboxed, a smaller one says how big it must be; online play is co-op in one sea with a boat and three lives each and a shared score, with no pause; two players first, up to four through a host that relays. Not verified: play between two real computers or terminals on Windows or macOS, and bit-identity of the rules across machines beyond the recorded-hash test that CI runs on three operating systems (nothing checks wasm).
+
 Not done yet:
 
-- **Phase 6, multiplayer:** `Sim`, `Encode`/`Decode`, the `Local` and `Tcp` transports, lockstep and desync hashes.
+- **Phase 6, multiplayer, later parts:** the authoritative-server mode, rollback, and the `WebSocket` transport for the browser (SHA-1 and base64 by hand). The website still says that two-player games are on the keyboard only.
 - **Real-terminal verification on Windows and macOS:** no person has run the games there yet, and `quickgame` has no pty test.
 - **Tuning the feel of `glow`:** the speeds, key timeouts and ripple strength are first guesses.
 

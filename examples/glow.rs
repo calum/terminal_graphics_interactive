@@ -963,6 +963,8 @@ mod tests {
                 tick,
                 size: (80, 24),
                 seed: 1,
+                players: 1,
+                me: PlayerId(0),
             };
             play.update(&mut ctx);
             keys.end_tick();
@@ -992,6 +994,8 @@ mod tests {
             tick: 0,
             size: (80, 24),
             seed: 1,
+            players: 1,
+            me: PlayerId(0),
         };
         play.update(&mut ctx)
     }
@@ -1094,6 +1098,8 @@ mod tests {
                 tick,
                 size: (80, 24),
                 seed: 7,
+                players: 1,
+                me: PlayerId(0),
             };
             play.update(&mut ctx);
             keys.end_tick();

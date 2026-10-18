@@ -72,7 +72,15 @@ Play the examples. `sail` is the flagship: a sailboat on the open sea, under a s
 cargo run --example sail        # the flagship: a sailboat on the sea; steer to dodge the fireballs
 cargo run --example glow        # a light drifts through a plasma sky; touch the motes
 cargo run --example quickgame   # steer a @ and collect the * stars for 20 seconds
+cargo run --example sail_together -- host 2        # sail with a friend: one hosts (waits for 1 more) ...
+cargo run --example sail_together -- join HOST:7777   # ... and the other joins
 ```
+
+**It makes multiplayer games too.** This is `sail_together`: two players, two boats, one sea. Each machine runs the whole game and they share only their key presses, so it needs almost no bandwidth.
+
+![Two sailboats, a red one and a blue one, sailing side by side on the same sea while fireballs fall. The top row shows each player's lives](https://raw.githubusercontent.com/calum/terminal_graphics_interactive/master/assets/sail_together.gif)
+
+*A recording of the real game, from the first player's screen. The two players here are two games joined by an in-process link, so the recording is the same every time; the example itself plays over TCP between computers (`cargo run --release --example make_gifs` rebuilds it).*
 
 This is the shape of `quickgame`: a title that switches to the play screen on Enter. The rest is in [examples/quickgame.rs](examples/quickgame.rs):
 
@@ -94,7 +102,9 @@ impl Game for Title {
 }
 ```
 
-What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the games also run on the website (`/games/`, the real games as WebAssembly), which a headless browser check loads but no person has looked at yet. Multiplayer is coming; it is not built.
+What is and is not verified. Held keys need key release events, which only some terminals send: kitty, WezTerm, Ghostty, foot, Alacritty, iTerm2 and recent Windows Terminal support the kitty keyboard protocol. Where a terminal does not, a held key is timed instead, so a key stays held for a moment after its last repeat. The glow game runs in a pseudo terminal in our tests on Linux, and quickgame is tested headless. Both games are not yet run by a person on Windows or macOS, and the games also run on the website (`/games/`, the real games as WebAssembly), which a headless browser check loads but no person has looked at yet. Multiplayer: `Sim`, `Lockstep` and the `Local` and `Tcp` transports are built and tested (including two machines playing `sail_together` over real TCP on loopback, and lossy, reordered and dropped messages over a fake link). The game's numbers are checked to be bit-identical across machines only by a recorded state hash that CI runs on Linux, macOS and Windows; no one has yet played `sail_together` between two real computers or terminals, and there is no WebSocket transport for the browser yet.
+
+Play between machines is lockstep: every machine runs the same deterministic `Sim` and they share only each player's input, so a match needs almost no bandwidth and a game that drifts apart is reported with the step it happened at. See `examples/sail_together.rs`.
 
 To test a game without a terminal, use `Headless`. It runs the same updates as `run`: you press keys, step time and read back what was drawn, as `tests/game_api.rs` and the tests in `examples/quickgame.rs` do.
 

@@ -69,3 +69,9 @@ name = "web_games"
 path = "examples/web_games.rs"
 crate-type = ["cdylib"]
 test = true
+
+# Sail for two to four players over TCP lockstep: the multiplayer milestone.
+[[example]]
+name = "sail_together"
+path = "examples/sail_together.rs"
+test = true

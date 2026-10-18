@@ -1,7 +1,7 @@
 //! Scenes: the stack of screens a game is made of, and the one update path
 //! that both the real loop and the headless runner use.
 
-use super::{Context, Keys, Screen};
+use super::{Context, Keys, PlayerId, Screen};
 use crate::Pointer;
 use std::time::Duration;
 
@@ -267,6 +267,8 @@ impl Scenes {
                     tick,
                     size,
                     seed,
+                    players: 1,
+                    me: PlayerId(0),
                 };
                 top.update(&mut ctx)
             }

@@ -1,5 +1,6 @@
 //! [`Waves`]: one sea function that both the picture and the physics read.
 
+use super::math;
 use std::f32::consts::TAU;
 
 /// A sea made of travelling waves. Define it once, then draw the water with
@@ -146,7 +147,9 @@ impl Waves {
         }
         let total: f32 = self.layers[..self.count]
             .iter()
-            .map(|layer| layer.amplitude * (TAU * (x / layer.wavelength - layer.speed * t)).sin())
+            .map(|layer| {
+                layer.amplitude * math::sin(TAU * (x / layer.wavelength - layer.speed * t))
+            })
             .filter(|value| value.is_finite())
             .sum();
         if total.is_finite() {
@@ -218,7 +221,7 @@ impl Waves {
             .iter()
             .map(|layer| {
                 let phase = TAU * (x / layer.wavelength - layer.speed * t);
-                layer.amplitude * (TAU / layer.wavelength) * phase.cos()
+                layer.amplitude * (TAU / layer.wavelength) * math::cos(phase)
             })
             .filter(|value| value.is_finite())
             .sum();
@@ -234,6 +237,26 @@ impl Waves {
 mod tests {
     use super::*;
     use std::f32::consts::PI;
+
+    #[test]
+    fn height_and_slope_use_the_deterministic_maths_so_every_machine_agrees() {
+        // one layer, so the sum is a single term and can be rebuilt exactly
+        let sea = Waves::new().layer(0.7, 9.0, 0.3);
+        for i in 0..2000 {
+            let (x, t) = (i as f32 * 0.37, i as f32 * 0.011);
+            let phase = TAU * (x / 9.0 - 0.3 * t);
+            assert_eq!(
+                sea.height(x, t).to_bits(),
+                (0.7 * crate::game::math::sin(phase)).to_bits(),
+                "height at x={x} t={t}"
+            );
+            assert_eq!(
+                sea.slope(x, t).to_bits(),
+                (0.7 * (TAU / 9.0) * crate::game::math::cos(phase)).to_bits(),
+                "slope at x={x} t={t}"
+            );
+        }
+    }
 
     #[test]
     fn the_default_sea_is_flat_water() {

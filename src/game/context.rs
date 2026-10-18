@@ -1,6 +1,9 @@
 //! The [`Context`]: what a game's `update` is given each step.
 
 use super::Keys;
+use super::PlayerId;
+#[cfg(test)]
+use super::{Game, Headless, Next};
 use crate::Pointer;
 
 /// Everything an update needs, and nothing it should own.
@@ -39,6 +42,10 @@ pub struct Context<'a> {
     /// The run's random seed. Build your own `Rng::new(ctx.seed)` once, in
     /// your first scene, and use that for all your randomness.
     pub seed: u64,
+    /// How many players are in the game: `1` for local play.
+    pub players: usize,
+    /// Which player this machine is: `PlayerId(0)` for local play.
+    pub me: PlayerId,
 }
 
 impl Context<'_> {
@@ -68,6 +75,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_play_is_one_player_and_i_am_the_first() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Ask(Rc<Cell<Option<(usize, PlayerId)>>>);
+        impl Game for Ask {
+            fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+                self.0.set(Some((ctx.players, ctx.me)));
+                Next::stay()
+            }
+        }
+
+        let seen = Rc::new(Cell::new(None));
+        Headless::new(Ask(Rc::clone(&seen))).step(1);
+        assert_eq!(seen.get(), Some((1, PlayerId(0))));
+    }
+
+    #[test]
     fn time_is_the_tick_count_times_the_step() {
         let keys = Keys::new();
         let pointer = Pointer::default();
@@ -78,6 +103,8 @@ mod tests {
             tick: 7,
             size: (80, 24),
             seed: 1,
+            players: 1,
+            me: PlayerId(0),
         };
         assert_eq!(ctx.time(), 3.5);
     }
