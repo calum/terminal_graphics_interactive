@@ -280,12 +280,12 @@ fn sail_together_players(columns: u32, rows: u32) -> (Headless, Headless) {
 }
 
 /// Which way each player steers at `seconds` into the recording: a short nudge
-/// out and back, every three seconds, mirrored so the boats stay apart.
+/// out and back, every three seconds, mirrored, so the boats start by drifting apart.
 fn steering(player: usize, seconds: f32) -> Option<KeyCode> {
     let (out, back) = if player == 0 {
-        (KeyCode::Right, KeyCode::Left)
-    } else {
         (KeyCode::Left, KeyCode::Right)
+    } else {
+        (KeyCode::Right, KeyCode::Left)
     };
     match seconds % 3.0 {
         t if t < 0.4 => Some(out),
@@ -556,13 +556,13 @@ mod tests {
 
     #[test]
     fn the_steering_script_sails_each_player_back_and_forth() {
-        assert_eq!(steering(0, 0.2), Some(KeyCode::Right));
+        assert_eq!(steering(0, 0.2), Some(KeyCode::Left));
         assert_eq!(steering(0, 1.0), None);
-        assert_eq!(steering(0, 1.7), Some(KeyCode::Left));
-        assert_eq!(steering(0, 3.2), Some(KeyCode::Right), "it repeats");
-        assert_eq!(steering(1, 0.2), Some(KeyCode::Left));
+        assert_eq!(steering(0, 1.7), Some(KeyCode::Right));
+        assert_eq!(steering(0, 3.2), Some(KeyCode::Left), "it repeats");
+        assert_eq!(steering(1, 0.2), Some(KeyCode::Right));
         assert_eq!(steering(1, 1.0), None);
-        assert_eq!(steering(1, 1.7), Some(KeyCode::Right));
+        assert_eq!(steering(1, 1.7), Some(KeyCode::Left));
     }
 
     #[test]
