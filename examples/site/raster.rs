@@ -80,13 +80,24 @@ pub fn render(display: &Display) -> Raster {
             };
             let fill = blend(foreground, background, quarters.unwrap_or(0));
             let (left, top) = (column * CELL_WIDTH, row * CELL_HEIGHT);
+            // the half blocks of the pixel layer: the colour fills one half
+            let half = match pixel.character() {
+                '▀' => Some(true),
+                '▄' => Some(false),
+                _ => None,
+            };
             for y in top..top + CELL_HEIGHT {
+                let colour = match half {
+                    Some(upper) if (y - top < CELL_HEIGHT / 2) == upper => foreground,
+                    Some(_) => background,
+                    None => fill,
+                };
                 for x in left..left + CELL_WIDTH {
-                    raster.pixels[y * raster.width + x] = fill;
+                    raster.pixels[y * raster.width + x] = colour;
                 }
             }
             // a letter or symbol is only a dot: enough to see something is there
-            if quarters.is_none() {
+            if quarters.is_none() && half.is_none() {
                 for y in top + 5..top + 11 {
                     for x in left + 2..left + 6 {
                         raster.pixels[y * raster.width + x] = foreground;
@@ -261,6 +272,22 @@ mod tests {
         display
     }
 
+    #[test]
+    fn half_blocks_fill_half_the_cell_with_the_colour_and_half_with_the_background() {
+        use terminal_graphics_interactive::Colour;
+        let (red, blue) = (rgb(Colour::Red), rgb(Colour::Blue));
+        let top = render(&display_with('▀', Colour::Red, Colour::Blue));
+        let bottom = render(&display_with('▄', Colour::Red, Colour::Blue));
+        for y in 0..CELL_HEIGHT {
+            let (want_top, want_bottom) = if y < CELL_HEIGHT / 2 {
+                (red, blue)
+            } else {
+                (blue, red)
+            };
+            assert_eq!(top.get(3, y), want_top, "upper half block, row {y}");
+            assert_eq!(bottom.get(3, y), want_bottom, "lower half block, row {y}");
+        }
+    }
     #[test]
     fn blending_goes_from_all_background_to_all_foreground_in_quarters() {
         assert_eq!(blend(RED, BLUE, 0), BLUE);

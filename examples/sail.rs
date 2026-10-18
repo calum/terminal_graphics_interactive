@@ -1564,15 +1564,20 @@ impl SailSim {
         let t = self.elapsed;
         let waves = sea_scaled(progress, t, self.phase, rows, self.env.wave_scale);
 
+        let boats = self.sailors.len();
         for (i, sailor) in self.sailors.iter_mut().enumerate() {
             if sailor.lives == 0 {
                 continue;
             }
             let boat = &mut sailor.boat;
-            // boats start side by side, the first a third of the way across
-            boat.place(width, 0.3 + 0.1 * i as f32, |x| {
-                keel_under(&waves, x, t, water)
-            });
+            // a lone boat starts a third of the way across; several start spread
+            // over the strip the boats may sail in, so they do not overlap
+            let start = if boats > 1 {
+                0.2 + 0.4 * i as f32 / (boats - 1) as f32
+            } else {
+                0.3
+            };
+            boat.place(width, start, |x| keel_under(&waves, x, t, water));
             let across = inputs.get(i).copied().unwrap_or_default().0.clamp(-1, 1) as f32;
             boat.steer(
                 across * SAIL_SPEED * self.env.boat_speed,
@@ -3713,10 +3718,27 @@ mod tests {
         );
         assert_eq!(
             (hash_of(&sim), rng.state()),
-            (17047842182560643922, 12371428055675856712)
+            (11832761732752484210, 17754115434574872266)
         );
     }
 
+    #[test]
+    fn two_boats_start_apart_not_on_top_of_each_other() {
+        let mut rng = Rng::new(1);
+        let mut sim = SailSim::new(2, Env::new((80, 24)), &mut rng);
+        sim.launching = false;
+        sim.step(&[Steer(0), Steer(0)], &mut rng);
+        let (a, b) = (sim.sailors[0].boat.x, sim.sailors[1].boat.x);
+        assert!(b - a >= BOAT_WIDTH, "boats at {a} and {b} overlap");
+        // both inside the strip the boat may sail in
+        for x in [a, b] {
+            assert!((80.0 * 0.2..=80.0 * 0.6).contains(&x), "{x}");
+        }
+        // alone, the boat still starts where it always did
+        let mut solo = SailSim::new(1, Env::new((80, 24)), &mut rng);
+        solo.step(&[Steer(0)], &mut rng);
+        assert!((solo.sailors[0].boat.x - 80.0 * 0.3).abs() < 0.5);
+    }
     #[test]
     fn the_hash_follows_the_rules_state_and_ignores_the_picture_events() {
         let (mut sim, _) = two_boats(500);

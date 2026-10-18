@@ -4,11 +4,15 @@
 //! cargo run --release --example make_gifs [output-directory]
 //! ```
 //!
-//! Each GIF runs the real source of an example (`examples/plasma.rs`,
+//! The art GIFs run the real source of an example (`examples/plasma.rs`,
 //! `examples/balls.rs`) through the same interpreter the website uses, against
 //! the real library, while a scripted mouse moves, clicks and drags. The mouse
 //! arrow and click rings are drawn on top so you can see what it is doing.
 //! Everything here is Rust, so the GIFs can be rebuilt by anyone.
+//!
+//! The `sail_together` GIF plays the real multiplayer game (`examples/sail.rs`)
+//! with two players joined by an in-process link and scripted steering, so it
+//! is the same every time.
 
 #[allow(dead_code)]
 #[path = "site/gif.rs"]
@@ -20,8 +24,14 @@ mod raster;
 #[path = "site/script/mod.rs"]
 mod script;
 
+#[allow(dead_code)]
+#[path = "sail.rs"]
+mod sail;
+
 use raster::{Mouse, Raster};
 use std::path::{Path, PathBuf};
+use terminal_graphics_interactive::game::{Config, Headless, Local, PlayerId};
+use terminal_graphics_interactive::KeyCode;
 use terminal_graphics_interactive::{sketch_frame, Display, Pointer};
 
 /// Where the scripted mouse is at one moment, in cells.
@@ -216,20 +226,115 @@ fn pictures(take: &Take) -> Result<Vec<Raster>, String> {
 
 /// The finished GIF.
 fn gif_bytes(take: &Take) -> Result<Vec<u8>, String> {
-    let pictures = pictures(take)?;
+    encode(&pictures(take)?, take.delay)
+}
+
+/// Packs pictures into a GIF with `delay` hundredths of a second between them.
+fn encode(pictures: &[Raster], delay: u16) -> Result<Vec<u8>, String> {
     let Some(first) = pictures.first() else {
         return Err("a take needs at least one frame".into());
     };
     let (width, height) = (first.width, first.height);
-    let (palette, indexes) = raster::quantize(&pictures);
+    let (palette, indexes) = raster::quantize(pictures);
     let frames: Vec<gif::Frame> = indexes
         .into_iter()
-        .map(|pixels| gif::Frame {
-            pixels,
-            delay: take.delay,
-        })
+        .map(|pixels| gif::Frame { pixels, delay })
         .collect();
     Ok(gif::encode(width as u16, height as u16, &palette, &frames))
+}
+// ---------------------------------------------------------------------------
+// The multiplayer take: two players sailing together
+// ---------------------------------------------------------------------------
+
+/// The recording of `sail_together`: the real game, two players on two
+/// machines (here two games joined by an in-process link, so the recording
+/// is the same every time), shown from the first player's screen.
+struct SailTogether {
+    columns: u32,
+    rows: u32,
+    frames: usize,
+    /// How many 60 Hz updates pass between pictures.
+    steps_per_frame: u32,
+    delay: u16,
+}
+
+/// The sea seed of the recording.
+const SAIL_SEED: u64 = 3;
+
+/// Two games of `sail_together`, `columns` by `rows`, a second into the match.
+fn sail_together_players(columns: u32, rows: u32) -> (Headless, Headless) {
+    let settings = sail::Settings::sized(SAIL_SEED, columns, rows + 1);
+    let mut ends = Local::network(2).into_iter();
+    let mut make = |me: u8| {
+        let end = ends.next().expect("a link for each player");
+        let config = Config::new(2, PlayerId(me)).star(false);
+        Headless::new(sail::together(end, config, &settings)).size(columns, rows)
+    };
+    let mut one = make(0);
+    let mut two = make(1);
+    for _ in 0..30 {
+        one.step(1);
+        two.step(1);
+    }
+    (one, two)
+}
+
+/// Which way each player steers at `seconds` into the recording: a short nudge
+/// out and back, every three seconds, mirrored so the boats stay apart.
+fn steering(player: usize, seconds: f32) -> Option<KeyCode> {
+    let (out, back) = if player == 0 {
+        (KeyCode::Right, KeyCode::Left)
+    } else {
+        (KeyCode::Left, KeyCode::Right)
+    };
+    match seconds % 3.0 {
+        t if t < 0.4 => Some(out),
+        t if (1.5..1.9).contains(&t) => Some(back),
+        _ => None,
+    }
+}
+
+/// Presses and releases keys so that `game` holds only `want`.
+fn hold(game: &mut Headless, held: &mut Option<KeyCode>, want: Option<KeyCode>) {
+    if *held == want {
+        return;
+    }
+    if let Some(old) = *held {
+        game.release(old);
+    }
+    if let Some(new) = want {
+        game.press(new);
+    }
+    *held = want;
+}
+
+/// The pictures of the first player's screen.
+fn sail_together_pictures(take: &SailTogether) -> Result<Vec<Raster>, String> {
+    let (mut one, mut two) = sail_together_players(take.columns, take.rows);
+    let mut held = [None, None];
+    let mut pictures = Vec::with_capacity(take.frames);
+    let mut step = 0u32;
+    for _ in 0..take.frames {
+        for _ in 0..take.steps_per_frame {
+            let seconds = step as f32 / 60.0;
+            hold(&mut one, &mut held[0], steering(0, seconds));
+            hold(&mut two, &mut held[1], steering(1, seconds));
+            one.step(1);
+            two.step(1);
+            step += 1;
+        }
+        let text = one.text();
+        if text.contains("drifted apart") || text.contains("left the game") {
+            return Err(format!("the match broke while recording:\n{text}"));
+        }
+        pictures.push(raster::render(one.screen().display()));
+    }
+    Ok(pictures)
+}
+
+/// The finished GIF of the multiplayer take.
+fn sail_together_gif(take: &SailTogether) -> Result<Vec<u8>, String> {
+    encode(&sail_together_pictures(take)?, take.delay)
 }
 
 fn main() -> std::io::Result<()> {
@@ -248,6 +353,24 @@ fn main() -> std::io::Result<()> {
                 eprintln!("{}: {message}", take.name);
                 std::process::exit(1);
             }
+        }
+    }
+    let take = SailTogether {
+        columns: 80,
+        rows: 22,
+        frames: 160,
+        steps_per_frame: 3,
+        delay: 5,
+    };
+    match sail_together_gif(&take) {
+        Ok(bytes) => {
+            let path: PathBuf = Path::new(&out).join("sail_together.gif");
+            std::fs::write(&path, &bytes)?;
+            println!("{}: {} KiB", path.display(), bytes.len() / 1024);
+        }
+        Err(message) => {
+            eprintln!("sail_together: {message}");
+            std::process::exit(1);
         }
     }
     Ok(())
@@ -377,6 +500,112 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_sail_together_take_has_two_players_and_one_picture_per_frame() {
+        let (mut one, _two) = sail_together_players(40, 12);
+        assert!(one.text().contains("P1") && one.text().contains("P2"));
+        let take = SailTogether {
+            columns: 40,
+            rows: 12,
+            frames: 8,
+            steps_per_frame: 3,
+            delay: 5,
+        };
+        let pictures = sail_together_pictures(&take).unwrap();
+        assert_eq!(pictures.len(), 8);
+        for picture in &pictures {
+            assert_eq!(picture.width, 40 * raster::CELL_WIDTH);
+            assert_eq!(picture.height, 12 * raster::CELL_HEIGHT);
+        }
+    }
+
+    #[test]
+    fn the_sail_together_take_animates_and_is_the_same_every_time() {
+        let take = SailTogether {
+            columns: 40,
+            rows: 12,
+            frames: 20,
+            steps_per_frame: 3,
+            delay: 5,
+        };
+        let a = sail_together_pictures(&take).unwrap();
+        let b = sail_together_pictures(&take).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a[0], a[19], "the boats sail");
+    }
+
+    #[test]
+    fn the_two_players_steer_different_ways() {
+        // the other player's boat moves across the picture too, so what is
+        // drawn depends on both players' keys
+        let steered = |left_player_steers: bool| {
+            let (mut one, mut two) = sail_together_players(40, 12);
+            for step in 0..180 {
+                one.press(KeyCode::Right);
+                if left_player_steers {
+                    two.press(KeyCode::Left);
+                }
+                one.step(1);
+                two.step(1);
+                let _ = step;
+            }
+            one.text()
+        };
+        assert_ne!(steered(true), steered(false));
+    }
+
+    #[test]
+    fn the_steering_script_sails_each_player_back_and_forth() {
+        assert_eq!(steering(0, 0.2), Some(KeyCode::Right));
+        assert_eq!(steering(0, 1.0), None);
+        assert_eq!(steering(0, 1.7), Some(KeyCode::Left));
+        assert_eq!(steering(0, 3.2), Some(KeyCode::Right), "it repeats");
+        assert_eq!(steering(1, 0.2), Some(KeyCode::Left));
+        assert_eq!(steering(1, 1.0), None);
+        assert_eq!(steering(1, 1.7), Some(KeyCode::Right));
+    }
+
+    #[test]
+    fn hold_presses_the_wanted_key_and_lets_go_of_the_old_one() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use terminal_graphics_interactive::game::{Context, Game, Next};
+
+        struct Watch(Rc<Cell<(bool, bool)>>);
+        impl Game for Watch {
+            fn update(&mut self, ctx: &mut Context<'_>) -> Next {
+                self.0
+                    .set((ctx.keys.held(KeyCode::Left), ctx.keys.held(KeyCode::Right)));
+                Next::stay()
+            }
+        }
+
+        let seen = Rc::new(Cell::new((false, false)));
+        let mut game = Headless::new(Watch(Rc::clone(&seen)));
+        let mut held = None;
+        hold(&mut game, &mut held, Some(KeyCode::Left));
+        game.step(1);
+        assert_eq!(seen.get(), (true, false));
+        hold(&mut game, &mut held, Some(KeyCode::Right));
+        game.step(1);
+        assert_eq!(seen.get(), (false, true), "left was let go");
+        hold(&mut game, &mut held, None);
+        game.step(1);
+        assert_eq!(seen.get(), (false, false));
+    }
+    #[test]
+    fn the_sail_together_gif_is_a_valid_gif() {
+        let take = SailTogether {
+            columns: 40,
+            rows: 12,
+            frames: 6,
+            steps_per_frame: 3,
+            delay: 5,
+        };
+        let bytes = sail_together_gif(&take).unwrap();
+        assert_eq!(&bytes[..6], b"GIF89a");
+        assert_eq!(bytes.last(), Some(&0x3B));
+    }
     #[test]
     fn a_take_is_deterministic() {
         for source in [PLASMA, BALLS] {
