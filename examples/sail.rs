@@ -2025,7 +2025,7 @@ impl Game for Play {
 pub struct Settings {
     /// The seed of the shared random numbers.
     pub seed: u64,
-    /// The size of the sea in columns and rows. Every window must be at least
+    /// The size of the sea in columns and rows, the host's window. Every window must be at least
     /// this big (one row more, for the terminal).
     pub width: u32,
     pub rows: u32,
@@ -2035,13 +2035,23 @@ pub struct Settings {
 
 #[allow(dead_code)]
 impl Settings {
-    /// A sea of 80 by 24 and an input delay of 3 steps (50 ms).
+    /// A sea of 80 by 24 and an input delay of 3 steps (50 ms); see [`Settings::sized`] for one as big as a window.
     pub fn new(seed: u64) -> Settings {
         Settings {
             seed,
             width: 80,
             rows: 24,
             delay: 3,
+        }
+    }
+
+    /// A sea as big as a host's window of `columns` by `window_rows`: the
+    /// game uses one row less than the window, which the terminal needs.
+    pub fn sized(seed: u64, columns: u32, window_rows: u32) -> Settings {
+        Settings {
+            width: columns.max(1),
+            rows: window_rows.saturating_sub(1).max(1),
+            ..Settings::new(seed)
         }
     }
 }

@@ -10,8 +10,10 @@
 //! cargo run --example sail_together -- join 192.168.1.5:7777
 //! ```
 //!
-//! The window must be at least 80 columns by 25 rows. A and D (or the arrows)
-//! steer and q leaves. Over the internet, the host forwards port 7777.
+//! The sea is as big as the host's window, so the host should start in a
+//! window that every player's window can match; a smaller window is told how
+//! big it must be. A and D (or the arrows) steer and q leaves. Over the
+//! internet, the host forwards port 7777.
 
 #[allow(dead_code)]
 #[path = "sail.rs"]
@@ -86,7 +88,7 @@ fn play(mode: Mode) -> io::Result<()> {
                 "waiting for {} more player(s) on port {port}.\nThey join with: cargo run --example sail_together -- join <this machine's address>:{port}",
                 players - 1
             );
-            host_session(host, players, seed_from_clock())?
+            host_session(host, players, seed_from_clock(), window_size()?)?
         }
         Mode::Join { addr } => {
             println!("joining {addr} ...");
@@ -97,11 +99,22 @@ fn play(mode: Mode) -> io::Result<()> {
     run(sail::together(tcp, config, &settings))
 }
 
+/// The size of this terminal window, asked by starting a session for a moment.
+/// The host's sea is as big as its window.
+fn window_size() -> io::Result<(u32, u32)> {
+    Ok(Terminal::start()?.size())
+}
+
 /// Waits for the other players, then tells them the seed and the size of the
 /// sea. Returns the host's connection and the settings it announced.
-fn host_session(host: Host, players: usize, seed: u64) -> io::Result<(Tcp, sail::Settings)> {
+fn host_session(
+    host: Host,
+    players: usize,
+    seed: u64,
+    window: (u32, u32),
+) -> io::Result<(Tcp, sail::Settings)> {
     let mut tcp = host.accept(players, Duration::from_secs(300))?;
-    let settings = sail::Settings::new(seed);
+    let settings = sail::Settings::sized(seed, window.0, window.1);
     announce(&mut tcp, players, &settings)?;
     Ok((tcp, settings))
 }
@@ -134,6 +147,13 @@ mod tests {
         line.split_whitespace().map(String::from).collect()
     }
 
+    #[test]
+    fn a_hosts_window_sets_the_sea_leaving_the_terminals_spare_row() {
+        let settings = sail::Settings::sized(1, 120, 40);
+        assert_eq!((settings.width, settings.rows), (120, 39));
+        let tiny = sail::Settings::sized(1, 0, 0);
+        assert_eq!((tiny.width, tiny.rows), (1, 1), "never an empty sea");
+    }
     #[test]
     fn the_command_line_chooses_host_or_join() {
         assert_eq!(
@@ -196,7 +216,7 @@ mod tests {
         let play_until_done =
             |tcp: Tcp, settings: sail::Settings, done: Arc<AtomicUsize>, gate: Arc<Barrier>| {
                 let config = Config::new(tcp.players(), PlayerId(tcp.me().0));
-                let mut game = Headless::new(sail::together(tcp, config, &settings)).size(80, 24);
+                let mut game = Headless::new(sail::together(tcp, config, &settings)).size(100, 29);
                 let started = Instant::now();
                 let mut finished = false;
                 loop {
@@ -224,14 +244,14 @@ mod tests {
         let host_done = Arc::clone(&done);
         let host_gate = Arc::clone(&leave_together);
         let host_thread = thread::spawn(move || {
-            let (tcp, settings) = host_session(host, 2, 77).unwrap();
+            let (tcp, settings) = host_session(host, 2, 77, (100, 30)).unwrap();
             play_until_done(tcp, settings, host_done, host_gate)
         });
         let (tcp, settings) = join_session(&addr).unwrap();
         assert_eq!(
             settings,
-            sail::Settings::new(77),
-            "the client got the host's settings"
+            sail::Settings::sized(77, 100, 30),
+            "the client got the host's settings, with a sea as big as the host's window"
         );
         let client_text = play_until_done(tcp, settings, Arc::clone(&done), leave_together);
         let host_text = host_thread.join().unwrap();
