@@ -4,9 +4,9 @@
 
 It adds what `terminal_graphics` lacks: reading key presses and mouse events (click, drag, scroll). `Terminal::start()` switches to a full-screen session, `terminal.poll(timeout)` returns events and doubles as the frame timer, and `terminal.draw(&display)` shows a `Display` so that mouse positions line up with its cells. Everything from `terminal_graphics` is re-exported, so one dependency and one import is enough: `use terminal_graphics_interactive::prelude::*;` brings in `Display`, `Colour`, `Graphics`, `Container`, `Text`, `Rect` and `Ball` together with `Terminal`, `Event`, `Key`, `Mouse` and the rest.
 
-Status: early (0.1) and not yet published to crates.io. Use it from git:
+Status: early (0.2), published on crates.io. Add it with `cargo add terminal_graphics_interactive`, or in `Cargo.toml`:
 
-    terminal_graphics_interactive = { git = "https://github.com/calum/terminal_graphics_interactive" }
+    terminal_graphics_interactive = "0.2"
 
 ## Use it when
 
