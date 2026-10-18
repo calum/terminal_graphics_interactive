@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-18
+
+Terminal Games (the `game` module), key release events, a diffing renderer, the art API, the website and multiplayer.
+
 - A GIF of `sail_together` in the README (`assets/sail_together.gif`), made by `make_gifs` from the real game; the rasteriser now draws the half blocks of the pixel layer.
 - **Multiplayer (phase 6).** `game::Sim` is the rules of a game apart from its picture (`type Input: Encode + Decode + Clone + Default`, `step(&mut self, inputs, rng)`, `hash`), and `game::Lockstep` plays one `Sim` on several machines by sharing only each player's input: an input delay (3 steps by default), the latest inputs resent in every packet so a link that drops or reorders heals itself, a stall (`Progress::Stalled { waiting_for }`) instead of a guess when an input is late, at most four steps of catching up per update, and a hash of the state compared every 60 steps so a game that drifts apart is reported as `Progress::Desync` with the step it happened between. A player who leaves or goes silent is `Progress::Lost`.
 - `game::Transport` (`send`, `poll`, `is_open`) with `Local` (in-process, for tests and hot-seat) and `Tcp` (`std::net`, non-blocking, length-prefixed messages, a star around the host: `Host::bind(addr)?.accept(players, timeout)` and `Tcp::join(addr, timeout)`). `game::announce` and `await_message` share the seed and settings before a match. A WebSocket transport for the browser is not built yet.
@@ -31,6 +35,19 @@
 - `Terminal::enable_key_release` (kitty keyboard protocol key-release events where the terminal supports it; it asks first and returns `false` otherwise) and `Terminal::has_key_release`.
 - `cargo run --example events -- --key-release` shows key press and release events on terminals that support them.
 - `Terminal::draw` now sends only the cells that changed; the first call draws everything. New public `Renderer` writes diffed frames to any `Write` (`Renderer::draw_to`, `Renderer::invalidate`). `cargo bench --bench render` compares it with a full redraw; see the README.
+- **Easy art API** (`art` module, in the prelude). `sketch(formula)` / `sketch_with(palette, formula)` fill the window every frame from a formula (a `Cell` with the column, the stretched row, the time and the mouse; return -1 to 1). `Palette` (`ocean`, `fire`, `rainbow`, `mono`, or `Palette::new`) turns numbers into colours using shade blocks for about 4x the steps. `World::new().balls(5).size(3.5).gravity(0.02).mouse_pulls().trails().run()` is a physics playground whose balls bounce off the walls and each other. Headless use for tests and benchmarks: `sketch_frame`, `World::simulation`, `Simulation`, `Pointer`.
+- `Terminal::report_mouse_movement()` turns on pointer movement reporting with no button held (off by default: it is a lot of events over a slow link).
+- New examples `plasma` and `balls`, benchmarks (`cargo bench --bench art`), `CONTRIBUTING.md` (how to add a palette, a setting or an example), and end-to-end scenarios for both examples on Windows, Linux and macOS.
+- `llms.txt` has a section on making art, whose examples are the real `examples/plasma.rs` and `examples/balls.rs`.
+- The design note is `docs/superpowers/specs/2026-10-17-art-api-design.md`.
+- README rewritten: a short pitch with GIFs of the plasma and the physics world (a scripted mouse arrow and click rings drawn over the real examples), install, the examples, and how to add mouse and keyboard to anything. `tests/readme.rs` checks the GIFs exist and are real GIFs of a sensible size, every GIF is shown, and the README shows the real example files.
+- `cargo run --release --example make_gifs` rebuilds `assets/*.gif`. It uses a pure Rust GIF encoder, a rasteriser, and a strict mini Rust interpreter (`examples/site/script`) that runs the real example sources and refuses what rustc would refuse (for example `cell.x * 2`). None of it is published to crates.io.
+- **A website** with a live editor, built from Rust: `examples/web_art.rs` is the art engine compiled to WebAssembly (it runs the real example sources through a strict mini Rust interpreter, `examples/site/script`), `examples/build_site.rs` writes the page into `target/site`, and `examples/check_site.rs` loads it in a headless browser and drives its buttons, editor and mouse (`--require` fails if no browser is found). `.github/workflows/pages.yml` builds and checks the site on every pull request and deploys it to GitHub Pages when `master` changes (Settings, Pages, Source = "GitHub Actions"). Examples `rings`, `tunnel`, `waves` and `bubbles` join the gallery.
+
+## 0.1.0 - 2026-10-17
+
+The first release: input, the terminal session and the parser.
+
 - `Terminal`: an interactive session. `Terminal::start()` enters raw mode,
   turns on mouse reporting and hides the cursor, and reads input on a
   background thread; `poll(timeout)` and `wait()` return events. Everything is
@@ -53,11 +70,3 @@
 - `cargo run --example screensaver`: bouncing dots with fading trails (click adds a dot, any key quits). It shows the frame-timer loop: draw, handle input until the next frame is due, advance the animation.
 - **Breaking (0.x):** pasted text now arrives as one `Event::Paste(String)` instead of key presses, using bracketed paste (the terminal is asked to wrap pastes in markers; `Terminal` turns it on and off). `Event` is no longer `Copy` and is `#[non_exhaustive]`, so a `match` on it needs a `_ =>` arm. Fixes right-click paste in terminals that paste on right click: pasting `cargo run ...` into `paint` used to press `c` (clear) and could press `q` (quit). Pastes over 1 MiB are cut. `paint` and `screensaver` ignore pastes.
 - CI: a `publish` job releases to crates.io when `master` has a new version (token from the `CARGO_REGISTRY_TOKEN` secret; it warns and skips if the secret is missing). `.github` and `CLAUDE.md` are left out of the published crate.
-- **Easy art API** (`art` module, in the prelude). `sketch(formula)` / `sketch_with(palette, formula)` fill the window every frame from a formula (a `Cell` with the column, the stretched row, the time and the mouse; return -1 to 1). `Palette` (`ocean`, `fire`, `rainbow`, `mono`, or `Palette::new`) turns numbers into colours using shade blocks for about 4x the steps. `World::new().balls(5).size(3.5).gravity(0.02).mouse_pulls().trails().run()` is a physics playground whose balls bounce off the walls and each other. Headless use for tests and benchmarks: `sketch_frame`, `World::simulation`, `Simulation`, `Pointer`.
-- `Terminal::report_mouse_movement()` turns on pointer movement reporting with no button held (off by default: it is a lot of events over a slow link).
-- New examples `plasma` and `balls`, benchmarks (`cargo bench --bench art`), `CONTRIBUTING.md` (how to add a palette, a setting or an example), and end-to-end scenarios for both examples on Windows, Linux and macOS.
-- `llms.txt` has a section on making art, whose examples are the real `examples/plasma.rs` and `examples/balls.rs`.
-- The design note is `docs/superpowers/specs/2026-10-17-art-api-design.md`.
-- README rewritten: a short pitch with GIFs of the plasma and the physics world (a scripted mouse arrow and click rings drawn over the real examples), install, the examples, and how to add mouse and keyboard to anything. `tests/readme.rs` checks the GIFs exist and are real GIFs of a sensible size, every GIF is shown, and the README shows the real example files.
-- `cargo run --release --example make_gifs` rebuilds `assets/*.gif`. It uses a pure Rust GIF encoder, a rasteriser, and a strict mini Rust interpreter (`examples/site/script`) that runs the real example sources and refuses what rustc would refuse (for example `cell.x * 2`). None of it is published to crates.io.
-- **A website** with a live editor, built from Rust: `examples/web_art.rs` is the art engine compiled to WebAssembly (it runs the real example sources through a strict mini Rust interpreter, `examples/site/script`), `examples/build_site.rs` writes the page into `target/site`, and `examples/check_site.rs` loads it in a headless browser and drives its buttons, editor and mouse (`--require` fails if no browser is found). `.github/workflows/pages.yml` builds and checks the site on every pull request and deploys it to GitHub Pages when `master` changes (Settings, Pages, Source = "GitHub Actions"). Examples `rings`, `tunnel`, `waves` and `bubbles` join the gallery.
