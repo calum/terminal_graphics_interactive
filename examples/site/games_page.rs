@@ -63,7 +63,10 @@ $ cargo run</pre>
 
 <section id="multiplayer">
 <h2>&gt; MULTIPLAYER</h2>
-<p>Multiplayer is not on this page yet. Two people can already share one keyboard in a game you write. Playing over a network is planned (lockstep over TCP first, then in the browser) and is not built.</p>
+<p>Multiplayer works in the terminal, and is not yet in the browser. <code>sail_together</code> is <code>sail</code> for two to four players: everyone sails the same sea in a boat of their own, and only the key presses cross the network (lockstep over TCP), so every machine runs the whole game. One player hosts and the others join:</p>
+<pre class="code">$ cargo run --example sail_together -- host 2
+$ cargo run --example sail_together -- join HOST:7777</pre>
+<p>It has been played between two Windows PowerShell windows on one laptop. It has not yet been tried across a real network, or in macOS and Linux terminals. The host has no password or encryption, so play on a network you trust, such as your own LAN. Playing in the browser needs a WebSocket transport, which is planned and not built. In your own game, put the rules in a <code>Sim</code> and <code>Lockstep</code> shares the inputs.</p>
 </section>
 
 <section>
@@ -814,12 +817,25 @@ mod tests {
     // ------------------------------------------------------------ multiplayer
 
     #[test]
-    fn multiplayer_says_plainly_that_it_is_not_on_this_page_yet() {
+    fn multiplayer_explains_sail_together_and_says_plainly_it_is_not_in_the_browser_yet() {
         let page = page();
         assert!(page.contains("<section id=\"multiplayer\">"));
         assert!(page.contains("&gt; MULTIPLAYER"));
-        assert!(page.contains("not on this page yet"));
-        assert!(page.contains("is not built"));
+        // what exists, and how to run it
+        assert!(page.contains("sail_together"));
+        assert!(page.contains("cargo run --example sail_together -- host 2"));
+        assert!(page.contains("cargo run --example sail_together -- join HOST:7777"));
+        assert!(page.contains("lockstep over TCP"));
+        // what is and is not verified, and what is not here yet
+        assert!(page.contains("not yet in the browser"));
+        assert!(page.contains("two Windows PowerShell windows on one laptop"));
+        assert!(page.contains("not yet been tried across a real network"));
+        assert!(page.contains("no password or encryption"));
+        assert!(page.contains("WebSocket"));
+        assert!(
+            !page.contains("is planned (lockstep over TCP first"),
+            "the old sentence says network play is not built"
+        );
     }
 
     // ----------------------------------------------------------------- script
