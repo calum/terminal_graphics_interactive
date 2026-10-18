@@ -100,6 +100,15 @@ and friends from `game::*`. Start from [examples/glow.rs](examples/glow.rs), or
 
 Draw objects as coloured regions (`PixelArt`, `disc`, `glow`, `Particles`), not as text characters; keep text for the HUD and labels. A terminal cell is one column wide and about twice as tall, so a half-block pixel is the unit of a shape, and a `glow` is the unit of light.
 
+## Make a game playable over a network
+
+Put the rules of the game in a type that implements `Sim` ([src/game/net/sim.rs](src/game/net/sim.rs)), and leave everything that is only for the picture (sparks, shake, sounds) outside it. [examples/sail.rs](examples/sail.rs) does this with `SailSim` and a separate `View`.
+
+1. Write the test first: two copies of your `Sim`, the same seed and the same inputs, must have the same `hash` after thousands of steps, and one different input must change it. Record that hash in a test; CI runs it on three operating systems, which is the evidence that the rules agree between machines.
+2. Inside `step` take random numbers only from the `rng` you are given, read no clock and no window size (put the size in the state), use `game::math::{sin, cos, exp}` instead of the `f32` methods, and iterate `Vec`s, not `HashMap`s. Put every field the rules read or write into `hash`, and nothing else.
+3. Test a match with `Lockstep` over `Local` (see the tests in [src/game/net/lockstep.rs](src/game/net/lockstep.rs)), then over real `Tcp` with port 0, as [examples/sail_together.rs](examples/sail_together.rs) does. Network tests must not be flaky: read until a message is complete, never trust one `read`, and wait in a loop with a deadline instead of a fixed sleep.
+4. A new transport implements `Transport` ([src/game/net/transport.rs](src/game/net/transport.rs)) and is tested with the fake lossy link in [src/game/net/lossy.rs](src/game/net/lossy.rs): dropped, duplicated and reordered messages.
+
 ## Add a game building block
 
 A building block is a small helper type in `src/game/`, such as `Timer` or

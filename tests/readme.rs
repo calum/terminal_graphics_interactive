@@ -165,7 +165,7 @@ fn the_games_section_is_honest_about_what_is_verified() {
         "not yet",
         "Windows",
         "macOS",
-        "is coming",
+        "no one has yet played `sail_together` between two real computers",
         "Headless",
     ] {
         assert!(
